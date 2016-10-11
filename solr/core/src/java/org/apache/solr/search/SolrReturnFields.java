@@ -16,6 +16,14 @@
  */
 package org.apache.solr.search;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.io.FilenameUtils;
@@ -27,7 +35,6 @@ import org.apache.solr.common.SolrException;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.ModifiableSolrParams;
 import org.apache.solr.common.params.SolrParams;
-import org.apache.solr.common.util.NamedList;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.transform.DocTransformer;
 import org.apache.solr.response.transform.DocTransformers;
@@ -36,15 +43,6 @@ import org.apache.solr.response.transform.ScoreAugmenter;
 import org.apache.solr.response.transform.TransformerFactory;
 import org.apache.solr.response.transform.ValueSourceAugmenter;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
 /**
  * Default implementation of {@link ReturnFields}.
  * Encapsulates parsing logic of {@link CommonParams#FL} parameter and provides methods
@@ -52,28 +50,26 @@ import java.util.Set;
  */
 public class SolrReturnFields extends ReturnFields {
 
-  private final List<String> globs = new ArrayList<>(1);
-
   public final static String SCORE = "score";
-  public final static char WILDCARD = '*';
-  public final static char QUESTION_MARK = '?';
-  public final static char OPEN_BRACKET = '[';
-  public final static char CLOSE_BRACKET = ']';
-  public final static char OPEN_PARENTHESIS = '(';
-  public final static char CLOSE_PARENTHESIS = ')';
-  public final static char LEFT_BRACE = '{';
-  public final static char RIGHT_BRACE = '}';
+  private final static char WILDCARD = '*';
+  private final static char QUESTION_MARK = '?';
+  private final static char OPEN_BRACKET = '[';
+  private final static char CLOSE_BRACKET = ']';
+  private final static char OPEN_PARENTHESIS = '(';
+  private final static char CLOSE_PARENTHESIS = ')';
+  private final static char LEFT_BRACE = '{';
+  private final static char RIGHT_BRACE = '}';
 
-  public final static char HYPHEN = '-';
-  public final static char QUOTE = '\'';
-  public final static char DQUOTE = '\"';
-  public final static char COLON = ':';
-  public final static char POUND_SIGN = '#';
-  public final static char DOT = '.';
-  public final static char PLUS = '+';
+  private final static char HYPHEN = '-';
+  private final static char QUOTE = '\'';
+  private final static char DQUOTE = '\"';
+  private final static char COLON = ':';
+  private final static char POUND_SIGN = '#';
+  private final static char DOT = '.';
+  private final static char PLUS = '+';
 
-  public final static String ALIAS_VALUE_SEPARATOR = Character.toString(COLON);
-  public final static String ALL_FIELDS = Character.toString(WILDCARD);
+  private final static String ALIAS_VALUE_SEPARATOR = Character.toString(COLON);
+  private final static String ALL_FIELDS = Character.toString(WILDCARD);
 
 
   // The list of explicitly requested fields
@@ -81,9 +77,7 @@ public class SolrReturnFields extends ReturnFields {
   private Set<String> requestedFieldNames;
 
   protected DocTransformer transformer;
-  protected boolean _wantsScore = false;
-  protected boolean _wantsAllFields = false;
-  protected Map<String,String> renameFields = Collections.emptyMap();
+  private Map<String,String> renameFields = Collections.emptyMap();
 
   // Parser state (initial state is "detecting token type").
   private ParserState currentState;
@@ -146,7 +140,7 @@ public class SolrReturnFields extends ReturnFields {
    * @param expressionBuffer the char buffer that holds the literal expression.
    * @param augmenters       the accumulator for requested transformers.
    */
-  void onInclusionLiteralExpression(final StringBuilder expressionBuffer, final DocTransformers augmenters,
+  private void onInclusionLiteralExpression(final StringBuilder expressionBuffer, final DocTransformers augmenters,
                                     final boolean rename, final boolean isRealField) {
     final String alias = getExpressionAlias(expressionBuffer);
     final String fieldname = getExpressionValue(expressionBuffer);
@@ -178,7 +172,7 @@ public class SolrReturnFields extends ReturnFields {
    * @param fieldNameBuffer the buffer that hold the exclusion literal.
    * @throws SyntaxError in case the
    */
-  void onExclusionLiteralFieldName(final StringBuilder fieldNameBuffer) throws SyntaxError {
+  private void onExclusionLiteralFieldName(final StringBuilder fieldNameBuffer) throws SyntaxError {
     if (CollectionUtils.isEmpty(inclusions) && CollectionUtils.isEmpty(inclusionGlobs)) {
       if (getExpressionAlias(fieldNameBuffer) == null) {
         wantsAllFields = false;
@@ -197,7 +191,7 @@ public class SolrReturnFields extends ReturnFields {
    * @param augmenters       the transformer collector for the current request.
    * @throws SyntaxError in case of invalid syntax.
    */
-  void onTransformer(final StringBuilder expressionBuffer, final SolrQueryRequest request, final DocTransformers augmenters)
+  private void onTransformer(final StringBuilder expressionBuffer, final SolrQueryRequest request, final DocTransformers augmenters)
       throws SyntaxError {
     if (expressionBuffer != null) {
       String fl_Content = expressionBuffer.toString();
@@ -210,8 +204,8 @@ public class SolrReturnFields extends ReturnFields {
           QueryParsing.parseLocalParams(expressionBuffer.toString(), 0, augmenterCustomArgs, request.getParams(), "[", CLOSE_BRACKET);
           final String[] augmenterCustomName = augmenterCustomArgs.remove("type");
           final String customDisp = '[' + augmenterCustomName[0] + ']';
-          inclusions().add(customDisp);  //TODO: This was added
-          requestedFieldNames().add(customDisp);  //TODO: This was added
+          inclusions().add(customDisp);
+          requestedFieldNames().add(customDisp);
           final TransformerFactory customFactory = request.getCore().getTransformerFactory(augmenterCustomName[0]);
           if (customFactory != null) {
             augmenters.addTransformer(customFactory.create(customDisp, augmenterCustomArgs, request));
@@ -247,7 +241,7 @@ public class SolrReturnFields extends ReturnFields {
    *
    * @param bufferChar the character buffer that holds the current (glob) expression.
    */
-  void onInclusionGlob(final StringBuilder bufferChar) {
+  private void onInclusionGlob(final StringBuilder bufferChar) {
     final String glob = getExpressionValue(bufferChar);
 
     if (!ALL_FIELDS.equals(glob)) {
@@ -275,7 +269,7 @@ public class SolrReturnFields extends ReturnFields {
    *
    * @param expressionBuffer the glob expression buffer.
    */
-  void onExclusionGlobExpression(final StringBuilder expressionBuffer) {
+  private void onExclusionGlobExpression(final StringBuilder expressionBuffer) {
     if (getExpressionAlias(expressionBuffer) == null) {
       final String glob = getExpressionValue(expressionBuffer);
 
@@ -334,7 +328,7 @@ public class SolrReturnFields extends ReturnFields {
    * @param request          the current request.
    * @throws SyntaxError in case the function has a wrong syntax or there's no function neither a field with such name.
    */
-  void onFunction(final StringBuilder expressionBuffer, final DocTransformers augmenters, final SolrQueryRequest request)
+  private void onFunction(final StringBuilder expressionBuffer, final DocTransformers augmenters, final SolrQueryRequest request)
       throws SyntaxError {
 
     final String alias = getExpressionAlias(expressionBuffer);
@@ -583,7 +577,7 @@ public class SolrReturnFields extends ReturnFields {
      *
      * @param newState the {@link ParserState},
      */
-    protected void switchTo(final ParserState newState) {
+    void switchTo(final ParserState newState) {
       currentState = newState;
     }
 
@@ -593,7 +587,7 @@ public class SolrReturnFields extends ReturnFields {
      *
      * @param expressionBuffer the char buffer to reset.
      */
-    protected void restartWithNewToken(final StringBuilder expressionBuffer) {
+    void restartWithNewToken(final StringBuilder expressionBuffer) {
       expressionBuffer.setLength(0);
       currentState = detectingTokenType;
     }
@@ -610,7 +604,7 @@ public class SolrReturnFields extends ReturnFields {
      * @param ch ch the character to be tested.
      * @return true if the character may start a field list expression; false otherwise.
      */
-    protected boolean isFieldListExpressionStart(final char ch) {
+    boolean isFieldListExpressionStart(final char ch) {
       return Character.isJavaIdentifierPart(ch) || ch == POUND_SIGN || ch == LEFT_BRACE;
     }
 
@@ -628,7 +622,7 @@ public class SolrReturnFields extends ReturnFields {
      * @param ch ch the character to be tested.
      * @return true if the character can be part of a field list expression; false otherwise.
      */
-    protected boolean isFieldListExpressionPart(final char ch) {
+    boolean isFieldListExpressionPart(final char ch) {
       return Character.isJavaIdentifierPart(ch) || ch == DOT || ch == COLON || ch == POUND_SIGN || ch == HYPHEN ||
           ch == PLUS || ch == LEFT_BRACE || ch == RIGHT_BRACE || ch == '!';
     }
@@ -647,7 +641,7 @@ public class SolrReturnFields extends ReturnFields {
      * @param ch ch the character to be tested.
      * @return true if the character may start a SOLR fieldname; false otherwise.
      */
-    protected boolean isSolrFunctionPart(final char ch) {
+    boolean isSolrFunctionPart(final char ch) {
       return isFieldListExpressionPart(ch) || ch == ',' || ch == '.' || ch == ' ' || ch == '\'' || ch == '\"' || ch == '='
           || ch == '-' || ch == '/' || ch == PLUS;
     }
@@ -658,7 +652,7 @@ public class SolrReturnFields extends ReturnFields {
      * @param buffer the char buffer containing the current expression.
      * @return true if the given buffer contains an expression which is actually a numeric constant.
      */
-    protected boolean isConstantOrFunction(final StringBuilder buffer) {
+    boolean isConstantOrFunction(final StringBuilder buffer) {
       if (buffer.indexOf("{!func") != -1) {
         return true;
       }
@@ -678,7 +672,7 @@ public class SolrReturnFields extends ReturnFields {
    * An exclusion glob token is being parsed.
    * Activated in case an exclusion glob is detected (e.g. -pipp*,-*ippo).
    */
-  final ParserState collectingExclusionGlob = new ParserState() {
+  private final ParserState collectingExclusionGlob = new ParserState() {
     @Override
     public void onChar(final char aChar, final StringBuilder expressionBuffer, final SolrQueryRequest request,
                        final DocTransformers augmenters) throws SyntaxError {
@@ -698,7 +692,7 @@ public class SolrReturnFields extends ReturnFields {
    * An exclusion (literal) token is being parsed.
    * Activated in case an exclusion literal field name is detected (e.g. -pipp*,-*ippo).
    */
-  final ParserState collectingExclusionToken = new ParserState() {
+  private final ParserState collectingExclusionToken = new ParserState() {
     @Override
     public void onChar(final char aChar, final StringBuilder buffer, final SolrQueryRequest request,
                        final DocTransformers augmenters) throws SyntaxError {
@@ -722,7 +716,7 @@ public class SolrReturnFields extends ReturnFields {
    * A transformer token is being parsed.
    * Activated in case a transformer is detected (e.g. [docid][explain]).
    */
-  final ParserState collectingTransformer = new ParserState() {
+  private final ParserState collectingTransformer = new ParserState() {
     @Override
     public void onChar(final char aChar, final StringBuilder expressionBuffer, final SolrQueryRequest request,
                        final DocTransformers augmenters) throws SyntaxError {
@@ -738,7 +732,7 @@ public class SolrReturnFields extends ReturnFields {
    * An inclusion glob token is being parsed.
    * Activated in case an inclusion glob is detected (e.g. pipp*,*ippo).
    */
-  final ParserState collectingInclusionGlob = new ParserState() {
+  private final ParserState collectingInclusionGlob = new ParserState() {
     @Override
     public void onChar(final char aChar, final StringBuilder buffer, final SolrQueryRequest request,
                        final DocTransformers augmenters) {
@@ -754,7 +748,7 @@ public class SolrReturnFields extends ReturnFields {
   /**
    * A token that has been classified as function is being parsed.
    */
-  final ParserState collectingFunction = new ParserState() {
+  private final ParserState collectingFunction = new ParserState() {
     private int openParenthesis;
 
     @Override
@@ -785,7 +779,7 @@ public class SolrReturnFields extends ReturnFields {
   /**
    * A token that has been classified as function is being parsed.
    */
-  final ParserState collectingLiteral = new ParserState() {
+  private final ParserState collectingLiteral = new ParserState() {
     private int quoteCount;
 
     @Override
@@ -812,7 +806,7 @@ public class SolrReturnFields extends ReturnFields {
   /**
    * Parser state activated when a token maybe several things: inclusion (literal or glob) and function.
    */
-  ParserState maybeInclusionLiteralOrGlobOrFunction = new ParserState() {
+  private ParserState maybeInclusionLiteralOrGlobOrFunction = new ParserState() {
     @Override
     public void onChar(final char aChar, final StringBuilder builder, final SolrQueryRequest request,
                        final DocTransformers augmenters) throws SyntaxError {
@@ -853,7 +847,7 @@ public class SolrReturnFields extends ReturnFields {
   /**
    * Initial parser state: we know nothing about next (or the first) token.
    */
-  final ParserState detectingTokenType = new ParserState() {
+  private final ParserState detectingTokenType = new ParserState() {
     @Override
     public void onChar(final char aChar, final StringBuilder builder, final SolrQueryRequest request,
                        final DocTransformers augmenters) throws SyntaxError {
