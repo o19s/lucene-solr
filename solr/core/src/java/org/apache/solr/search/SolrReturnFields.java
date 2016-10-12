@@ -27,7 +27,6 @@ import org.apache.solr.common.SolrException;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.ModifiableSolrParams;
 import org.apache.solr.common.params.SolrParams;
-import org.apache.solr.common.util.NamedList;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.transform.DocTransformer;
 import org.apache.solr.response.transform.DocTransformers;
@@ -214,7 +213,7 @@ public class SolrReturnFields extends ReturnFields {
           requestedFieldNames().add(customDisp);  //TODO: This was added
           final TransformerFactory customFactory = request.getCore().getTransformerFactory(augmenterCustomName[0]);
           if (customFactory != null) {
-            augmenters.addTransformer(customFactory.create(customDisp, augmenterCustomArgs, request));
+            addAugmenter(request,augmenters,augmenterCustomArgs,customDisp,customFactory);
           }
         } else if (fl_Content.indexOf("[") > 0 && fl_Content.contains(":[")) {
           //Logic to Parse In_Built Transformers
@@ -227,11 +226,24 @@ public class SolrReturnFields extends ReturnFields {
           final String aliasThatWillBeUsed = (alias != null) ? alias : OPEN_BRACKET + augmenterName[0] + CLOSE_BRACKET;
           final TransformerFactory factory = request.getCore().getTransformerFactory(augmenterName[0]);
           if (factory != null) {
-            augmenters.addTransformer(factory.create(aliasThatWillBeUsed, augmenterArgs, request));
+            addAugmenter(request,augmenters,augmenterArgs,aliasThatWillBeUsed,factory);
             onInclusionLiteralExpression(expressionBuffer, augmenters, false, false);
           }
         }
       }
+    }
+  }
+
+  private void addAugmenter(SolrQueryRequest request, DocTransformers augmenters, ModifiableSolrParams augmenterCustomArgs, String customDisp, TransformerFactory customFactory) {
+    DocTransformer t = customFactory.create(customDisp, augmenterCustomArgs, request);
+    if(t!=null) {
+      if(!_wantsAllFields) {
+        String[] extra = t.getExtraRequestFields();
+        if(extra!=null) {
+          Collections.addAll(luceneFieldNames(), extra);
+        }
+      }
+      augmenters.addTransformer( t );
     }
   }
 
@@ -304,18 +316,32 @@ public class SolrReturnFields extends ReturnFields {
   @Override
   public boolean wantsField(final String name) {
     Boolean mustInclude = cache.get(name);
+    
     if (mustInclude == null) // first time request for this field
     {
-      if (CollectionUtils.isEmpty(exclusions) && CollectionUtils.isEmpty(exclusionGlobs)) {
-        mustInclude = wantsAllFields() || (inclusions != null && inclusions.contains(name))
-            || (inclusionGlobs != null && wildcardMatch(name, inclusionGlobs))
-            || (luceneFieldNames != null && luceneFieldNames.contains(name));
-      } else {
-        mustInclude = !((exclusions != null && exclusions.contains(name)) || (exclusionGlobs != null && wildcardMatch(name,
-            exclusionGlobs)));
-      }
+      mustInclude = (inclusionRequested(name) || noFlAtAll() || haveOnlyExclusions()) && !exclusionRequested(name);
       cache.put(name, mustInclude);
     }
+    return mustInclude;
+  }
+
+  private boolean noFlAtAll() {
+    return exclusionGlobs == null && exclusions == null && inclusionGlobs == null && luceneFieldNames == null && inclusions == null;
+  }
+  private boolean haveOnlyExclusions() {
+    return (exclusionGlobs != null || exclusions != null) && inclusionGlobs == null && luceneFieldNames == null && inclusions == null;
+  }
+
+  private boolean exclusionRequested(String name) {
+    return (exclusions != null && exclusions.contains(name)) || (exclusionGlobs != null && wildcardMatch(name,
+          exclusionGlobs));
+  }
+
+  private Boolean inclusionRequested(String name) {
+    Boolean mustInclude;
+    mustInclude = wantsAllFields() || (inclusions != null && inclusions.contains(name))
+        || (inclusionGlobs != null && wildcardMatch(name, inclusionGlobs))
+        || (luceneFieldNames != null && luceneFieldNames.contains(name));
     return mustInclude;
   }
 
