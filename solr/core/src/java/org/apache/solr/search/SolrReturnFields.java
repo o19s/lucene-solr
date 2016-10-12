@@ -208,7 +208,7 @@ public class SolrReturnFields extends ReturnFields {
           requestedFieldNames().add(customDisp);
           final TransformerFactory customFactory = request.getCore().getTransformerFactory(augmenterCustomName[0]);
           if (customFactory != null) {
-            augmenters.addTransformer(customFactory.create(customDisp, augmenterCustomArgs, request));
+            addAugmenter(request, augmenters, augmenterCustomArgs, customDisp, customFactory);
           }
         } else if (fl_Content.indexOf("[") > 0 && fl_Content.contains(":[")) {
           //Logic to Parse In_Built Transformers
@@ -219,13 +219,28 @@ public class SolrReturnFields extends ReturnFields {
           QueryParsing.parseLocalParams(transfomerExpression, 0, augmenterArgs, request.getParams(), "[", CLOSE_BRACKET);
           final String[] augmenterName = augmenterArgs.remove("type");
           final String aliasThatWillBeUsed = (alias != null) ? alias : OPEN_BRACKET + augmenterName[0] + CLOSE_BRACKET;
+          inclusions().add(aliasThatWillBeUsed);
           final TransformerFactory factory = request.getCore().getTransformerFactory(augmenterName[0]);
           if (factory != null) {
-            augmenters.addTransformer(factory.create(aliasThatWillBeUsed, augmenterArgs, request));
-            onInclusionLiteralExpression(expressionBuffer, augmenters, false, false);
+            addAugmenter(request, augmenters, augmenterArgs, aliasThatWillBeUsed, factory);
           }
         }
       }
+    }
+  }
+
+  private void addAugmenter(SolrQueryRequest request, DocTransformers augmenters, ModifiableSolrParams augmenterArgs, String aliasThatWillBeUsed, TransformerFactory factory) {
+    DocTransformer t = factory.create(aliasThatWillBeUsed, augmenterArgs, request);
+    if(t!=null) {
+      if (!wantsAllFields()) {
+        String[] extra = t.getExtraRequestFields();
+        if (extra != null) {
+          for (String f : extra) {
+            luceneFieldNames().add(f); // also request this field from IndexSearcher
+          }
+        }
+      }
+      augmenters.addTransformer(t);
     }
   }
 
@@ -303,7 +318,7 @@ public class SolrReturnFields extends ReturnFields {
       if (CollectionUtils.isEmpty(exclusions) && CollectionUtils.isEmpty(exclusionGlobs)) {
         mustInclude = wantsAllFields() || (inclusions != null && inclusions.contains(name))
             || (inclusionGlobs != null && wildcardMatch(name, inclusionGlobs))
-            || (luceneFieldNames != null && luceneFieldNames.contains(name));
+            || (aliases != null && aliases.containsKey(name));
       } else {
         mustInclude = !((exclusions != null && exclusions.contains(name)) || (exclusionGlobs != null && wildcardMatch(name,
             exclusionGlobs)));
