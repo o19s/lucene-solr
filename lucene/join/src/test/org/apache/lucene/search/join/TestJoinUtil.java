@@ -95,7 +95,7 @@ import org.apache.lucene.util.TestUtil;
 import org.apache.lucene.util.packed.PackedInts;
 import org.junit.Test;
 
-import com.carrotsearch.randomizedtesting.generators.RandomInts;
+import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 
 public class TestJoinUtil extends LuceneTestCase {
@@ -267,7 +267,7 @@ public class TestJoinUtil extends LuceneTestCase {
       values[i] = DocValues.getSorted(leafReader, joinField);
     }
     MultiDocValues.OrdinalMap ordinalMap = MultiDocValues.OrdinalMap.build(
-        r.getCoreCacheKey(), values, PackedInts.DEFAULT
+        null, values, PackedInts.DEFAULT
     );
 
     Query toQuery = new TermQuery(new Term(typeField, "price"));
@@ -372,7 +372,7 @@ public class TestJoinUtil extends LuceneTestCase {
       values[i] = DocValues.getSorted(leafReader, joinField);
     }
     MultiDocValues.OrdinalMap ordinalMap = MultiDocValues.OrdinalMap.build(
-        r.getCoreCacheKey(), values, PackedInts.DEFAULT
+        null, values, PackedInts.DEFAULT
     );
 
     Query toQuery = new TermQuery(new Term("price", "5.0"));
@@ -454,59 +454,7 @@ public class TestJoinUtil extends LuceneTestCase {
 
   public void testMinMaxScore() throws Exception {
     String priceField = "price";
-    // FunctionQuery would be helpful, but join module doesn't depend on queries module.
-    Query priceQuery = new Query() {
-
-      private final Query fieldQuery = new FieldValueQuery(priceField);
-
-      @Override
-      public Weight createWeight(IndexSearcher searcher, boolean needsScores, float boost) throws IOException {
-        Weight fieldWeight = fieldQuery.createWeight(searcher, false, boost);
-        return new Weight(this) {
-
-          @Override
-          public void extractTerms(Set<Term> terms) {
-          }
-
-          @Override
-          public Explanation explain(LeafReaderContext context, int doc) throws IOException {
-            return null;
-          }
-
-          @Override
-          public Scorer scorer(LeafReaderContext context) throws IOException {
-            Scorer fieldScorer = fieldWeight.scorer(context);
-            if (fieldScorer == null) {
-              return null;
-            }
-            NumericDocValues price = context.reader().getNumericDocValues(priceField);
-            return new FilterScorer(fieldScorer, this) {
-              @Override
-              public float score() throws IOException {
-                assertEquals(in.docID(), price.nextDoc());
-                return (float) price.longValue();
-              }
-            };
-          }
-        };
-      }
-
-      @Override
-      public String toString(String field) {
-        return fieldQuery.toString(field);
-      }
-
-      @Override
-      public boolean equals(Object o) {
-        return o == this;
-      }
-
-      @Override
-      public int hashCode() {
-        return System.identityHashCode(this);
-      }
-
-    };
+    Query priceQuery = numericDocValuesScoreQuery(priceField);
 
     Directory dir = newDirectory();
     RandomIndexWriter iw = new RandomIndexWriter(
@@ -517,7 +465,7 @@ public class TestJoinUtil extends LuceneTestCase {
 
     Map<String, Float> lowestScoresPerParent = new HashMap<>();
     Map<String, Float> highestScoresPerParent = new HashMap<>();
-    int numParents = RandomInts.randomIntBetween(random(), 16, 64);
+    int numParents = RandomNumbers.randomIntBetween(random(), 16, 64);
     for (int p = 0; p < numParents; p++) {
       String parentId = Integer.toString(p);
       Document parentDoc = new Document();
@@ -525,7 +473,7 @@ public class TestJoinUtil extends LuceneTestCase {
       parentDoc.add(new StringField("type", "to", Field.Store.NO));
       parentDoc.add(new SortedDocValuesField("join_field", new BytesRef(parentId)));
       iw.addDocument(parentDoc);
-      int numChildren = RandomInts.randomIntBetween(random(), 2, 16);
+      int numChildren = RandomNumbers.randomIntBetween(random(), 2, 16);
       int lowest = Integer.MAX_VALUE;
       int highest = Integer.MIN_VALUE;
       for (int c = 0; c < numChildren; c++) {
@@ -552,7 +500,7 @@ public class TestJoinUtil extends LuceneTestCase {
       values[leadContext.ord] = DocValues.getSorted(leadContext.reader(), "join_field");
     }
     MultiDocValues.OrdinalMap ordinalMap = MultiDocValues.OrdinalMap.build(
-        searcher.getIndexReader().getCoreCacheKey(), values, PackedInts.DEFAULT
+        null, values, PackedInts.DEFAULT
     );
     BooleanQuery.Builder fromQuery = new BooleanQuery.Builder();
     fromQuery.add(priceQuery, BooleanClause.Occur.MUST);
@@ -579,6 +527,62 @@ public class TestJoinUtil extends LuceneTestCase {
     dir.close();
   }
 
+  // FunctionQuery would be helpful, but join module doesn't depend on queries module.
+  static Query numericDocValuesScoreQuery(final String field) {
+    return new Query() {
+
+        private final Query fieldQuery = new FieldValueQuery(field);
+
+        @Override
+        public Weight createWeight(IndexSearcher searcher, boolean needsScores, float boost) throws IOException {
+          Weight fieldWeight = fieldQuery.createWeight(searcher, false, boost);
+          return new Weight(this) {
+
+            @Override
+            public void extractTerms(Set<Term> terms) {
+            }
+
+            @Override
+            public Explanation explain(LeafReaderContext context, int doc) throws IOException {
+              return null;
+            }
+
+            @Override
+            public Scorer scorer(LeafReaderContext context) throws IOException {
+              Scorer fieldScorer = fieldWeight.scorer(context);
+              if (fieldScorer == null) {
+                return null;
+              }
+              NumericDocValues price = context.reader().getNumericDocValues(field);
+              return new FilterScorer(fieldScorer, this) {
+                @Override
+                public float score() throws IOException {
+                  assertEquals(in.docID(), price.advance(in.docID()));
+                  return (float) price.longValue();
+                }
+              };
+            }
+          };
+        }
+
+        @Override
+        public String toString(String field) {
+          return fieldQuery.toString(field);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+          return o == this;
+        }
+
+        @Override
+        public int hashCode() {
+          return System.identityHashCode(this);
+        }
+
+      };
+  }
+
   public void testMinMaxDocs() throws Exception {
     Directory dir = newDirectory();
     RandomIndexWriter iw = new RandomIndexWriter(
@@ -589,7 +593,7 @@ public class TestJoinUtil extends LuceneTestCase {
 
     int minChildDocsPerParent = 2;
     int maxChildDocsPerParent = 16;
-    int numParents = RandomInts.randomIntBetween(random(), 16, 64);
+    int numParents = RandomNumbers.randomIntBetween(random(), 16, 64);
     int[] childDocsPerParent = new int[numParents];
     for (int p = 0; p < numParents; p++) {
       String parentId = Integer.toString(p);
@@ -598,7 +602,7 @@ public class TestJoinUtil extends LuceneTestCase {
       parentDoc.add(new StringField("type", "to", Field.Store.NO));
       parentDoc.add(new SortedDocValuesField("join_field", new BytesRef(parentId)));
       iw.addDocument(parentDoc);
-      int numChildren = RandomInts.randomIntBetween(random(), minChildDocsPerParent, maxChildDocsPerParent);
+      int numChildren = RandomNumbers.randomIntBetween(random(), minChildDocsPerParent, maxChildDocsPerParent);
       childDocsPerParent[p] = numChildren;
       for (int c = 0; c < numChildren; c++) {
         String childId = Integer.toString(p + c);
@@ -617,16 +621,16 @@ public class TestJoinUtil extends LuceneTestCase {
       values[leadContext.ord] = DocValues.getSorted(leadContext.reader(), "join_field");
     }
     MultiDocValues.OrdinalMap ordinalMap = MultiDocValues.OrdinalMap.build(
-        searcher.getIndexReader().getCoreCacheKey(), values, PackedInts.DEFAULT
+        null, values, PackedInts.DEFAULT
     );
     Query fromQuery = new TermQuery(new Term("type", "from"));
     Query toQuery = new TermQuery(new Term("type", "to"));
 
-    int iters = RandomInts.randomIntBetween(random(), 3, 9);
+    int iters = RandomNumbers.randomIntBetween(random(), 3, 9);
     for (int i = 1; i <= iters; i++) {
       final ScoreMode scoreMode = ScoreMode.values()[random().nextInt(ScoreMode.values().length)];
-      int min = RandomInts.randomIntBetween(random(), minChildDocsPerParent, maxChildDocsPerParent - 1);
-      int max = RandomInts.randomIntBetween(random(), min, maxChildDocsPerParent);
+      int min = RandomNumbers.randomIntBetween(random(), minChildDocsPerParent, maxChildDocsPerParent - 1);
+      int max = RandomNumbers.randomIntBetween(random(), min, maxChildDocsPerParent);
       if (VERBOSE) {
         System.out.println("iter=" + i);
         System.out.println("scoreMode=" + scoreMode);
@@ -1067,7 +1071,7 @@ public class TestJoinUtil extends LuceneTestCase {
     );
 
     IndexIterationContext context = new IndexIterationContext();
-    int numRandomValues = nDocs / RandomInts.randomIntBetween(random, 1, 4);
+    int numRandomValues = nDocs / RandomNumbers.randomIntBetween(random, 1, 4);
     context.randomUniqueValues = new String[numRandomValues];
     Set<String> trackSet = new HashSet<>();
     context.randomFrom = new boolean[numRandomValues];
@@ -1332,7 +1336,7 @@ public class TestJoinUtil extends LuceneTestCase {
         values[leadContext.ord] = DocValues.getSorted(leadContext.reader(), "join_field");
       }
       context.ordinalMap = MultiDocValues.OrdinalMap.build(
-          topLevelReader.getCoreCacheKey(), values, PackedInts.DEFAULT
+          null, values, PackedInts.DEFAULT
       );
     }
 

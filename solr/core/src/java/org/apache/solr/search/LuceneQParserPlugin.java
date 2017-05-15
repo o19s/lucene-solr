@@ -28,6 +28,8 @@ import java.util.List;
  * <br>Other parameters:<ul>
  * <li>q.op - the default operator "OR" or "AND"</li>
  * <li>df - the default field name</li>
+ * <li>sow - split on whitespace prior to analysis, boolean,
+ *           default=<code>{@value org.apache.solr.search.SolrQueryParser#DEFAULT_SPLIT_ON_WHITESPACE}</code></li>
  * </ul>
  * <br>Example: <code>{!lucene q.op=AND df=text sort='price asc'}myfield:foo +bar -baz</code>
  */
@@ -77,8 +79,14 @@ class OldLuceneQParser extends LuceneQParser {
   }
 
   @Override
+  @Deprecated
   public SortSpec getSort(boolean useGlobal) throws SyntaxError {
-    SortSpec sort = super.getSort(useGlobal);
+    return getSortSpec(useGlobal);
+  }
+
+  @Override
+  public SortSpec getSortSpec(boolean useGlobal) throws SyntaxError {
+    SortSpec sort = super.getSortSpec(useGlobal);
     if (sortStr != null && sortStr.length()>0 && sort.getSort()==null) {
       SortSpec oldSort = SortSpecParsing.parseSortSpec(sortStr, getReq());
       if( oldSort.getSort() != null ) {

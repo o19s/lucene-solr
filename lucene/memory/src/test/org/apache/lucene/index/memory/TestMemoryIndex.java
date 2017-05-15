@@ -40,11 +40,13 @@ import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.SortedSetDocValuesField;
+import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.FieldInvertState;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.LeafReader;
@@ -200,6 +202,21 @@ public class TestMemoryIndex extends LuceneTestCase {
   }
 
   @Test
+  public void testOmitNorms() throws IOException {
+    MemoryIndex mi = new MemoryIndex();
+    FieldType ft = new FieldType();
+    ft.setTokenized(true);
+    ft.setIndexOptions(IndexOptions.DOCS_AND_FREQS);
+    ft.setOmitNorms(true);
+    mi.addField(new Field("f1", "some text in here", ft), analyzer);
+    mi.freeze();
+
+    LeafReader leader = (LeafReader) mi.createSearcher().getIndexReader();
+    NumericDocValues norms = leader.getNormValues("f1");
+    assertNull(norms);
+  }
+
+  @Test
   public void testBuildFromDocument() {
 
     Document doc = new Document();
@@ -276,7 +293,7 @@ public class TestMemoryIndex extends LuceneTestCase {
     try {
       MemoryIndex.fromDocument(doc, analyzer);
     } catch (IllegalArgumentException e) {
-      assertEquals("Can't add [BINARY] doc values field [field], because [NUMERIC] doc values field already exists", e.getMessage());
+      assertEquals("cannot change DocValues type from NUMERIC to BINARY for field \"field\"", e.getMessage());
     }
 
     doc = new Document();
@@ -406,11 +423,22 @@ public class TestMemoryIndex extends LuceneTestCase {
     }
   }
 
-  public void testPointValuesDoNotAffectBoostPositionsOrOffset() throws Exception {
+  public void testMissingPoints() throws IOException {
+    Document doc = new Document();
+    doc.add(new StoredField("field", 42));
+    MemoryIndex mi = MemoryIndex.fromDocument(doc, analyzer);
+    IndexSearcher indexSearcher = mi.createSearcher();
+    // field that exists but does not have points
+    assertNull(indexSearcher.getIndexReader().leaves().get(0).reader().getPointValues("field"));
+    // field that does not exist
+    assertNull(indexSearcher.getIndexReader().leaves().get(0).reader().getPointValues("some_missing_field"));
+  }
+
+  public void testPointValuesDoNotAffectPositionsOrOffset() throws Exception {
     MemoryIndex mi = new MemoryIndex(true, true);
-    mi.addField(new TextField("text", "quick brown fox", Field.Store.NO), analyzer, 5f);
-    mi.addField(new BinaryPoint("text", "quick".getBytes(StandardCharsets.UTF_8)), analyzer, 5f);
-    mi.addField(new BinaryPoint("text", "brown".getBytes(StandardCharsets.UTF_8)), analyzer, 5f);
+    mi.addField(new TextField("text", "quick brown fox", Field.Store.NO), analyzer);
+    mi.addField(new BinaryPoint("text", "quick".getBytes(StandardCharsets.UTF_8)), analyzer);
+    mi.addField(new BinaryPoint("text", "brown".getBytes(StandardCharsets.UTF_8)), analyzer);
     LeafReader leafReader = mi.createSearcher().getIndexReader().leaves().get(0).reader();
     TermsEnum tenum = leafReader.terms("text").iterator();
 
@@ -479,9 +507,9 @@ public class TestMemoryIndex extends LuceneTestCase {
     MemoryIndex mi = MemoryIndex.fromDocument(doc, analyzer);
     LeafReader leafReader = mi.createSearcher().getIndexReader().leaves().get(0).reader();
 
-    assertEquals(1, leafReader.getPointValues().size("field"));
-    assertArrayEquals(packedPoint, leafReader.getPointValues().getMinPackedValue("field"));
-    assertArrayEquals(packedPoint, leafReader.getPointValues().getMaxPackedValue("field"));
+    assertEquals(1, leafReader.getPointValues("field").size());
+    assertArrayEquals(packedPoint, leafReader.getPointValues("field").getMinPackedValue());
+    assertArrayEquals(packedPoint, leafReader.getPointValues("field").getMaxPackedValue());
 
     BinaryDocValues dvs = leafReader.getBinaryDocValues("field");
     assertEquals(0, dvs.nextDoc());

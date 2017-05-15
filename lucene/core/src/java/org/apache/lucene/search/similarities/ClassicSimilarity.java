@@ -18,6 +18,9 @@ package org.apache.lucene.search.similarities;
 
 
 import org.apache.lucene.index.FieldInvertState;
+import org.apache.lucene.search.CollectionStatistics;
+import org.apache.lucene.search.Explanation;
+import org.apache.lucene.search.TermStatistics;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.SmallFloat;
 
@@ -66,8 +69,7 @@ public class ClassicSimilarity extends TFIDFSimilarity {
    * represent are rounded down to the largest representable value. Positive
    * values too small to represent are rounded up to the smallest positive
    * representable value.
-   * 
-   * @see org.apache.lucene.document.Field#setBoost(float)
+   *
    * @see org.apache.lucene.util.SmallFloat
    */
   @Override
@@ -100,7 +102,7 @@ public class ClassicSimilarity extends TFIDFSimilarity {
       numTerms = state.getLength() - state.getNumOverlap();
     else
       numTerms = state.getLength();
-    return state.getBoost() * ((float) (1.0 / Math.sqrt(numTerms)));
+    return (float) (1.0 / Math.sqrt(numTerms));
   }
 
   /** Implemented as <code>sqrt(freq)</code>. */
@@ -119,6 +121,16 @@ public class ClassicSimilarity extends TFIDFSimilarity {
   @Override
   public float scorePayload(int doc, int start, int end, BytesRef payload) {
     return 1;
+  }
+
+  @Override
+  public Explanation idfExplain(CollectionStatistics collectionStats, TermStatistics termStats) {
+    final long df = termStats.docFreq();
+    final long docCount = collectionStats.docCount() == -1 ? collectionStats.maxDoc() : collectionStats.docCount();
+    final float idf = idf(df, docCount);
+    return Explanation.match(idf, "idf, computed as log((docCount+1)/(docFreq+1)) + 1 from:",
+        Explanation.match(df, "docFreq"),
+        Explanation.match(docCount, "docCount"));
   }
 
   /** Implemented as <code>log((docCount+1)/(docFreq+1)) + 1</code>. */

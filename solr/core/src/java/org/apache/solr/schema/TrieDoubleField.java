@@ -52,7 +52,7 @@ import org.apache.lucene.util.mutable.MutableValueDouble;
  */
 public class TrieDoubleField extends TrieField implements DoubleValueFieldType {
   {
-    type=TrieTypes.DOUBLE;
+    type = NumberType.DOUBLE;
   }
   
   @Override
@@ -82,6 +82,7 @@ public class TrieDoubleField extends TrieField implements DoubleValueFieldType {
               throw new IllegalArgumentException("docs out of order: lastDocID=" + lastDocID + " docID=" + docID);
             }
             if (docID > view.docID()) {
+              lastDocID = docID;
               return docID == view.advance(docID);
             } else {
               return docID == view.docID();

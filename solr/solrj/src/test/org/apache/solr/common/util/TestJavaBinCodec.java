@@ -47,10 +47,10 @@ import org.noggit.CharArr;
 public class TestJavaBinCodec extends SolrTestCaseJ4 {
 
   private static final String SOLRJ_JAVABIN_BACKCOMPAT_BIN = "/solrj/javabin_backcompat.bin";
-  private final String BIN_FILE_LOCATION = "./solr/solrj/src/test-files/solrj/javabin_backcompat.bin";
+  private static final String BIN_FILE_LOCATION = "./solr/solrj/src/test-files/solrj/javabin_backcompat.bin";
 
   private static final String SOLRJ_JAVABIN_BACKCOMPAT_BIN_CHILD_DOCS = "/solrj/javabin_backcompat_child_docs.bin";
-  private final String BIN_FILE_LOCATION_CHILD_DOCS = "./solr/solrj/src/test-files/solrj/javabin_backcompat_child_docs.bin";
+  private static final String BIN_FILE_LOCATION_CHILD_DOCS = "./solr/solrj/src/test-files/solrj/javabin_backcompat_child_docs.bin";
 
   public void testStrings() throws Exception {
     for (int i = 0; i < 10000 * RANDOM_MULTIPLIER; i++) {
@@ -340,30 +340,7 @@ public class TestJavaBinCodec extends SolrTestCaseJ4 {
     assertTrue(l1.get(1).equals(l2.get(1)));
     assertFalse(l1.get(1) == l2.get(1));
 
-    JavaBinCodec.StringCache stringCache = new JavaBinCodec.StringCache(new Cache<JavaBinCodec.StringBytes, String>() {
-      private HashMap<JavaBinCodec.StringBytes, String> cache = new HashMap<>();
-
-      @Override
-      public String put(JavaBinCodec.StringBytes key, String val) {
-        return cache.put(key, val);
-      }
-
-      @Override
-      public String get(JavaBinCodec.StringBytes key) {
-        return cache.get(key);
-      }
-
-      @Override
-      public String remove(JavaBinCodec.StringBytes key) {
-        return cache.remove(key);
-      }
-
-      @Override
-      public void clear() {
-        cache.clear();
-
-      }
-    });
+    JavaBinCodec.StringCache stringCache = new JavaBinCodec.StringCache(new MapBackedCache<>(new HashMap<>()));
 
 
     m1 = (Map) new JavaBinCodec(null, stringCache).unmarshal(new ByteArrayInputStream(b1));
@@ -409,32 +386,7 @@ public class TestJavaBinCodec extends SolrTestCaseJ4 {
     Runtime.getRuntime().gc();
     printMem("before cache init");
 
-    Cache<JavaBinCodec.StringBytes, String> cache1 = new Cache<JavaBinCodec.StringBytes, String>() {
-      private HashMap<JavaBinCodec.StringBytes, String> cache = new HashMap<>();
-
-      @Override
-      public String put(JavaBinCodec.StringBytes key, String val) {
-        l.add(key);
-        return cache.put(key, val);
-
-      }
-
-      @Override
-      public String get(JavaBinCodec.StringBytes key) {
-        return cache.get(key);
-      }
-
-      @Override
-      public String remove(JavaBinCodec.StringBytes key) {
-        return cache.remove(key);
-      }
-
-      @Override
-      public void clear() {
-        cache.clear();
-
-      }
-    };
+    Cache<JavaBinCodec.StringBytes, String> cache1 = new MapBackedCache<>(new HashMap<>()) ;
     final JavaBinCodec.StringCache STRING_CACHE = new JavaBinCodec.StringCache(cache1);
 
 //    STRING_CACHE = new JavaBinCodec.StringCache(cache);

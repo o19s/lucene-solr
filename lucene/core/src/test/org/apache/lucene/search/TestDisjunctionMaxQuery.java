@@ -74,7 +74,7 @@ public class TestDisjunctionMaxQuery extends LuceneTestCase {
     @Override
     public float lengthNorm(FieldInvertState state) {
       // Disable length norm
-      return state.getBoost();
+      return 1;
     }
     
     @Override
@@ -507,6 +507,22 @@ public class TestDisjunctionMaxQuery extends LuceneTestCase {
     indexReader.close();
     assertEquals(hits, 1);
     directory.close();
+  }
+  
+  public void testNegativeScore() throws Exception {
+    DisjunctionMaxQuery q = new DisjunctionMaxQuery(
+        Arrays.asList(
+            new BoostQuery(tq("hed", "albino"), -1f), 
+            new BoostQuery(tq("hed", "elephant"), -1f)
+        ), 0.0f);
+    
+    ScoreDoc[] h = s.search(q, 1000).scoreDocs;
+
+    assertEquals("all docs should match " + q.toString(), 4, h.length);
+    
+    for (int i = 0; i < h.length; i++) {
+      assertTrue("score should be negative", h[i].score < 0);
+    }
   }
   
   /** macro */

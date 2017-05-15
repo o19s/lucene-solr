@@ -28,6 +28,8 @@ import org.apache.solr.common.params.MapSolrParams;
 import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.StrUtils;
+import org.apache.solr.common.util.Utils;
+import org.apache.solr.core.PluginBag;
 import org.apache.solr.core.PluginInfo;
 import org.apache.solr.core.SolrCore;
 import org.apache.solr.request.SolrQueryRequest;
@@ -101,7 +103,7 @@ public final class UpdateRequestProcessorChain implements PluginInfoInitialized
 
   /**
    * Initializes the chain using the factories specified by the <code>PluginInfo</code>.
-   * if the chain includes the <code>RunUpdateProcessorFactory</code>, but 
+   * if the chain includes the <code>RunUpdateProcessorFactory</code>, but
    * does not include an implementation of the 
    * <code>DistributingUpdateProcessorFactory</code> interface, then an 
    * instance of <code>DistributedUpdateProcessorFactory</code> will be 
@@ -269,8 +271,20 @@ public final class UpdateRequestProcessorChain implements PluginInfoInitialized
       s = s.trim();
       if (s.isEmpty()) continue;
       UpdateRequestProcessorFactory p = core.getUpdateProcessors().get(s);
-      if (p == null)
-        throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, "No such processor " + s);
+      if (p == null) {
+        try {
+          PluginInfo pluginInfo = new PluginInfo("updateProcessor",
+              Utils.makeMap("name", s,
+                  "class", s + "UpdateProcessorFactory",
+                  "runtimeLib", "true"));
+
+          PluginBag.PluginHolder<UpdateRequestProcessorFactory> pluginHolder = core.getUpdateProcessors().createPlugin(pluginInfo);
+          core.getUpdateProcessors().put(s, p = pluginHolder.get());
+        } catch (SolrException e) {
+        }
+        if (p == null)
+          throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, "No such processor " + s);
+      }
       result.add(p);
     }
     return result;

@@ -16,19 +16,24 @@
  */
 package org.apache.solr.handler;
 
+import static org.apache.solr.common.params.CommonParams.ID;
+import static org.apache.solr.common.params.CommonParams.SORT;
+
 import java.io.IOException;
 import java.lang.invoke.MethodHandles;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 
 import org.apache.solr.client.solrj.io.ModelCache;
 import org.apache.solr.client.solrj.io.SolrClientCache;
 import org.apache.solr.client.solrj.io.Tuple;
 import org.apache.solr.client.solrj.io.comp.StreamComparator;
+import org.apache.solr.client.solrj.io.eval.*;
 import org.apache.solr.client.solrj.io.graph.GatherNodesStream;
 import org.apache.solr.client.solrj.io.graph.ShortestPathStream;
 import org.apache.solr.client.solrj.io.ops.ConcatOperation;
@@ -50,9 +55,9 @@ import org.apache.solr.common.SolrException;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.ModifiableSolrParams;
 import org.apache.solr.common.params.SolrParams;
-import org.apache.solr.common.util.NamedList;
 import org.apache.solr.core.CloseHook;
 import org.apache.solr.core.CoreContainer;
+import org.apache.solr.core.PluginInfo;
 import org.apache.solr.core.SolrCore;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.SolrQueryResponse;
@@ -69,11 +74,15 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
   private StreamFactory streamFactory = new StreamFactory();
   private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
   private String coreName;
-  private Map<String, DaemonStream> daemons = new HashMap<>();
+  private Map<String, DaemonStream> daemons = Collections.synchronizedMap(new HashMap());
 
   @Override
   public PermissionNameProvider.Name getPermissionName(AuthorizationContext request) {
     return PermissionNameProvider.Name.READ_PERM;
+  }
+
+  public static SolrClientCache getClientCache() {
+    return clientCache;
   }
 
   public void inform(SolrCore core) {
@@ -90,12 +99,12 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
 
     String defaultCollection;
     String defaultZkhost;
-    CoreContainer coreContainer = core.getCoreDescriptor().getCoreContainer();
+    CoreContainer coreContainer = core.getCoreContainer();
     this.coreName = core.getName();
 
     if(coreContainer.isZooKeeperAware()) {
       defaultCollection = core.getCoreDescriptor().getCollectionName();
-      defaultZkhost = core.getCoreDescriptor().getCoreContainer().getZkController().getZkServerAddress();
+      defaultZkhost = core.getCoreContainer().getZkController().getZkServerAddress();
       streamFactory.withCollectionZkHost(defaultCollection, defaultZkhost);
       streamFactory.withDefaultZkHost(defaultZkhost);
       modelCache = new ModelCache(250,
@@ -111,6 +120,7 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
       .withFunctionName("jdbc", JDBCStream.class)
       .withFunctionName("topic", TopicStream.class)
       .withFunctionName("commit", CommitStream.class)
+      .withFunctionName("random", RandomStream.class)
       
       // decorator streams
       .withFunctionName("merge", MergeStream.class)
@@ -127,42 +137,132 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
       .withFunctionName("outerHashJoin", OuterHashJoinStream.class)
       .withFunctionName("intersect", IntersectStream.class)
       .withFunctionName("complement", ComplementStream.class)
-      .withFunctionName("sort", SortStream.class)
+      .withFunctionName(SORT, SortStream.class)
       .withFunctionName("train", TextLogitStream.class)
       .withFunctionName("features", FeaturesSelectionStream.class)
       .withFunctionName("daemon", DaemonStream.class)
       .withFunctionName("shortestPath", ShortestPathStream.class)
       .withFunctionName("gatherNodes", GatherNodesStream.class)
+      .withFunctionName("nodes", GatherNodesStream.class)
       .withFunctionName("select", SelectStream.class)
+      .withFunctionName("shortestPath", ShortestPathStream.class)
+      .withFunctionName("gatherNodes", GatherNodesStream.class)
+      .withFunctionName("nodes", GatherNodesStream.class)
       .withFunctionName("scoreNodes", ScoreNodesStream.class)
-         .withFunctionName("model", ModelStream.class)
-         .withFunctionName("classify", ClassifyStream.class)
-             .withFunctionName("fetch", FetchStream.class)
+      .withFunctionName("model", ModelStream.class)
+      .withFunctionName("classify", ClassifyStream.class)
+      .withFunctionName("fetch", FetchStream.class)
+      .withFunctionName("executor", ExecutorStream.class)
+      .withFunctionName("null", NullStream.class)
+      .withFunctionName("priority", PriorityStream.class)
+         .withFunctionName("significantTerms", SignificantTermsStream.class)
+      .withFunctionName("cartesianProduct", CartesianProductStream.class)
+         .withFunctionName("shuffle", ShuffleStream.class)
+         .withFunctionName("calc", CalculatorStream.class)
+      .withFunctionName("eval",EvalStream.class)
+      .withFunctionName("echo", EchoStream.class)
+      .withFunctionName("cell", CellStream.class)
+      .withFunctionName("list", ListStream.class)
+      .withFunctionName("let", LetStream.class)
+      .withFunctionName("get", GetStream.class)
+      .withFunctionName("timeseries", TimeSeriesStream.class)
+      .withFunctionName("tuple", TupStream.class)
+      .withFunctionName("col", ColumnEvaluator.class)
+      .withFunctionName("predict", PredictEvaluator.class)
+      .withFunctionName("regress", RegressionEvaluator.class)
+      .withFunctionName("cov", CovarianceEvaluator.class)
+      .withFunctionName("conv", ConvolutionEvaluator.class)
+      .withFunctionName("normalize", NormalizeEvaluator.class)
+      .withFunctionName("rev", ReverseEvaluator.class)
+      .withFunctionName("length", LengthEvaluator.class)
+      .withFunctionName("rank", RankEvaluator.class)
+      .withFunctionName("scale", ScaleEvaluator.class)
+      .withFunctionName("distance", DistanceEvaluator.class)
+      .withFunctionName("copyOf", CopyOfEvaluator.class)
 
       // metrics
-      .withFunctionName("min", MinMetric.class)
+         .withFunctionName("min", MinMetric.class)
       .withFunctionName("max", MaxMetric.class)
       .withFunctionName("avg", MeanMetric.class)
       .withFunctionName("sum", SumMetric.class)
       .withFunctionName("count", CountMetric.class)
       
       // tuple manipulation operations
-      .withFunctionName("replace", ReplaceOperation.class)
+         .withFunctionName("replace", ReplaceOperation.class)
       .withFunctionName("concat", ConcatOperation.class)
       
       // stream reduction operations
-      .withFunctionName("group", GroupOperation.class)
-      .withFunctionName("distinct", DistinctOperation.class);
+         .withFunctionName("group", GroupOperation.class)
+      .withFunctionName("distinct", DistinctOperation.class)
+      .withFunctionName("having", HavingStream.class)
+      
+      // Stream Evaluators
+         .withFunctionName("val", RawValueEvaluator.class)
+      
+      // Boolean Stream Evaluators
+         .withFunctionName("and", AndEvaluator.class)
+      .withFunctionName("eor", ExclusiveOrEvaluator.class)
+      .withFunctionName("eq", EqualsEvaluator.class)
+      .withFunctionName("gt", GreaterThanEvaluator.class)
+      .withFunctionName("gteq", GreaterThanEqualToEvaluator.class)
+      .withFunctionName("lt", LessThanEvaluator.class)
+      .withFunctionName("lteq", LessThanEqualToEvaluator.class)
+      .withFunctionName("not", NotEvaluator.class)
+         .withFunctionName("or", OrEvaluator.class)
 
-    // This pulls all the overrides and additions from the config
-    Object functionMappingsObj = initArgs.get("streamFunctions");
-    if(null != functionMappingsObj){
-      NamedList<?> functionMappings = (NamedList<?>)functionMappingsObj;
-      for(Entry<String,?> functionMapping : functionMappings){
-        Class<? extends Expressible> clazz = core.getResourceLoader().findClass((String)functionMapping.getValue(), Expressible.class);
-        streamFactory.withFunctionName(functionMapping.getKey(), clazz);
-      }
-    }
+      // Date Time Evaluators
+         .withFunctionName(TemporalEvaluatorYear.FUNCTION_NAME, TemporalEvaluatorYear.class)
+      .withFunctionName(TemporalEvaluatorMonth.FUNCTION_NAME, TemporalEvaluatorMonth.class)
+      .withFunctionName(TemporalEvaluatorDay.FUNCTION_NAME, TemporalEvaluatorDay.class)
+      .withFunctionName(TemporalEvaluatorDayOfYear.FUNCTION_NAME, TemporalEvaluatorDayOfYear.class)
+         .withFunctionName(TemporalEvaluatorHour.FUNCTION_NAME, TemporalEvaluatorHour.class)
+      .withFunctionName(TemporalEvaluatorMinute.FUNCTION_NAME, TemporalEvaluatorMinute.class)
+         .withFunctionName(TemporalEvaluatorSecond.FUNCTION_NAME, TemporalEvaluatorSecond.class)
+      .withFunctionName(TemporalEvaluatorEpoch.FUNCTION_NAME, TemporalEvaluatorEpoch.class)
+      .withFunctionName(TemporalEvaluatorWeek.FUNCTION_NAME, TemporalEvaluatorWeek.class)
+         .withFunctionName(TemporalEvaluatorQuarter.FUNCTION_NAME, TemporalEvaluatorQuarter.class)
+         .withFunctionName(TemporalEvaluatorDayOfQuarter.FUNCTION_NAME, TemporalEvaluatorDayOfQuarter.class)
+
+      // Number Stream Evaluators
+         .withFunctionName("abs", AbsoluteValueEvaluator.class)
+      .withFunctionName("add", AddEvaluator.class)
+      .withFunctionName("div", DivideEvaluator.class)
+      .withFunctionName("mult", MultiplyEvaluator.class)
+      .withFunctionName("sub", SubtractEvaluator.class)
+      .withFunctionName("log", NaturalLogEvaluator.class)
+      .withFunctionName("pow", PowerEvaluator.class)
+      .withFunctionName("mod", ModuloEvaluator.class)
+         .withFunctionName("ceil", CeilingEvaluator.class)
+      .withFunctionName("floor", FloorEvaluator.class)
+      .withFunctionName("sin", SineEvaluator.class)
+      .withFunctionName("asin", ArcSineEvaluator.class)
+      .withFunctionName("sinh", HyperbolicSineEvaluator.class)
+      .withFunctionName("cos", CosineEvaluator.class)
+      .withFunctionName("acos", ArcCosineEvaluator.class)
+      .withFunctionName("cosh", HyperbolicCosineEvaluator.class)
+      .withFunctionName("tan", TangentEvaluator.class)
+      .withFunctionName("atan", ArcTangentEvaluator.class)
+      .withFunctionName("tanh", HyperbolicTangentEvaluator.class)
+         .withFunctionName("round", RoundEvaluator.class)
+      .withFunctionName("sqrt", SquareRootEvaluator.class)
+      .withFunctionName("cbrt", CubedRootEvaluator.class)
+      .withFunctionName("coalesce", CoalesceEvaluator.class)
+      .withFunctionName("uuid", UuidEvaluator.class)
+      .withFunctionName("corr", CorrelationEvaluator.class)
+
+
+      // Conditional Stream Evaluators
+         .withFunctionName("if", IfThenElseEvaluator.class)
+         .withFunctionName("analyze", AnalyzeEvaluator.class)
+         .withFunctionName("convert", ConversionEvaluator.class)
+      ;
+
+     // This pulls all the overrides and additions from the config
+     List<PluginInfo> pluginInfos = core.getSolrConfig().getPluginInfos(Expressible.class.getName());
+     for (PluginInfo pluginInfo : pluginInfos) {
+       Class<? extends Expressible> clazz = core.getMemClassLoader().findClass(pluginInfo.className, Expressible.class);
+       streamFactory.withFunctionName(pluginInfo.name, clazz);
+     }
         
     core.addCloseHook(new CloseHook() {
       @Override
@@ -202,6 +302,7 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
     int worker = params.getInt("workerID", 0);
     int numWorkers = params.getInt("numWorkers", 1);
     StreamContext context = new StreamContext();
+    context.put("shards", getCollectionShards(params));
     context.workerID = worker;
     context.numWorkers = numWorkers;
     context.setSolrClientCache(clientCache);
@@ -220,6 +321,7 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
       if(daemons.containsKey(daemonStream.getId())) {
         daemons.remove(daemonStream.getId()).close();
       }
+      daemonStream.setDaemons(daemons);
       daemonStream.open();  //This will start the deamonStream
       daemons.put(daemonStream.getId(), daemonStream);
       rsp.add("result-set", new DaemonResponseStream("Deamon:"+daemonStream.getId()+" started on "+coreName));
@@ -231,7 +333,7 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
   private void handleAdmin(SolrQueryRequest req, SolrQueryResponse rsp, SolrParams params) {
     String action = params.get("action");
     if("stop".equalsIgnoreCase(action)) {
-      String id = params.get("id");
+      String id = params.get(ID);
       DaemonStream d = daemons.get(id);
       if(d != null) {
         d.close();
@@ -239,21 +341,23 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
       } else {
         rsp.add("result-set", new DaemonResponseStream("Deamon:" + id + " not found on " + coreName));
       }
-    } else if("start".equalsIgnoreCase(action)) {
-      String id = params.get("id");
-      DaemonStream d = daemons.get(id);
-      d.open();
-      rsp.add("result-set", new DaemonResponseStream("Deamon:" + id + " started on " + coreName));
-    } else if("list".equalsIgnoreCase(action)) {
-      Collection<DaemonStream> vals = daemons.values();
-      rsp.add("result-set", new DaemonCollectionStream(vals));
-    } else if("kill".equalsIgnoreCase(action)) {
-      String id = params.get("id");
-      DaemonStream d = daemons.remove(id);
-      if (d != null) {
-        d.close();
+    } else {
+      if ("start".equalsIgnoreCase(action)) {
+        String id = params.get(ID);
+        DaemonStream d = daemons.get(id);
+        d.open();
+        rsp.add("result-set", new DaemonResponseStream("Deamon:" + id + " started on " + coreName));
+      } else if ("list".equalsIgnoreCase(action)) {
+        Collection<DaemonStream> vals = daemons.values();
+        rsp.add("result-set", new DaemonCollectionStream(vals));
+      } else if ("kill".equalsIgnoreCase(action)) {
+        String id = params.get("id");
+        DaemonStream d = daemons.remove(id);
+        if (d != null) {
+          d.close();
+        }
+        rsp.add("result-set", new DaemonResponseStream("Deamon:" + id + " killed on " + coreName));
       }
-      rsp.add("result-set", new DaemonResponseStream("Deamon:" + id + " killed on " + coreName));
     }
   }
 
@@ -462,6 +566,31 @@ public class StreamHandler extends RequestHandlerBase implements SolrCoreAware, 
         tuple.fields.put("RESPONSE_TIME", totalTime);
       }
       return tuple;
+    }
+  }
+
+  private Map<String, List<String>> getCollectionShards(SolrParams params) {
+
+    Map<String, List<String>> collectionShards = new HashMap();
+    Iterator<String> paramsIt = params.getParameterNamesIterator();
+    while(paramsIt.hasNext()) {
+      String param = paramsIt.next();
+      if(param.indexOf(".shards") > -1) {
+        String collection = param.split("\\.")[0];
+        String shardString = params.get(param);
+        String[] shards = shardString.split(",");
+        List<String> shardList = new ArrayList();
+        for(String shard : shards) {
+          shardList.add(shard);
+        }
+        collectionShards.put(collection, shardList);
+      }
+    }
+
+    if(collectionShards.size() > 0) {
+      return collectionShards;
+    } else {
+      return null;
     }
   }
 }

@@ -41,11 +41,11 @@ import org.apache.solr.util.RefCounted;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static org.apache.solr.common.params.CommonParams.VERSION_FIELD;
+
 public class VersionInfo {
 
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
-
-  public static final String VERSION_FIELD="_version_";
 
   private final UpdateLog ulog;
   private final VersionBucket[] buckets;
@@ -54,7 +54,7 @@ public class VersionInfo {
   final ReadWriteLock lock = new ReentrantReadWriteLock(true);
 
   /**
-   * Gets and returns the {@link #VERSION_FIELD} from the specified 
+   * Gets and returns the {@link org.apache.solr.common.params.CommonParams#VERSION_FIELD} from the specified
    * schema, after verifying that it is indexed, stored, and single-valued.  
    * If any of these pre-conditions are not met, it throws a SolrException 
    * with a user suitable message indicating the problem.
@@ -193,6 +193,10 @@ public class VersionInfo {
     return ulog.lookupVersion(idBytes);
   }
 
+  /**
+   * Returns the latest version from the index, searched by the given id (bytes) as seen from the realtime searcher.
+   * Returns null if no document can be found in the index for the given id.
+   */
   public Long getVersionFromIndex(BytesRef idBytes) {
     // TODO: we could cache much of this and invalidate during a commit.
     // TODO: most DocValues classes are threadsafe - expose which.
@@ -219,6 +223,9 @@ public class VersionInfo {
     }
   }
 
+  /**
+   * Returns the highest version from the index, or 0L if no versions can be found in the index.
+   */
   public Long getMaxVersionFromIndex(IndexSearcher searcher) throws IOException {
 
     String versionFieldName = versionField.getName();

@@ -34,7 +34,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
@@ -76,6 +75,8 @@ import org.apache.solr.common.cloud.ZooKeeperException;
 import org.apache.solr.common.params.CollectionParams;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.SolrParams;
+import org.apache.solr.common.util.IOUtils;
+import org.apache.solr.common.util.ObjectReleaseTracker;
 import org.apache.solr.common.util.StrUtils;
 import org.apache.solr.common.util.URLUtil;
 import org.apache.solr.common.util.Utils;
@@ -84,6 +85,7 @@ import org.apache.solr.core.CloudConfig;
 import org.apache.solr.core.CoreContainer;
 import org.apache.solr.core.CoreDescriptor;
 import org.apache.solr.core.SolrCore;
+import org.apache.solr.core.SolrCoreInitializationException;
 import org.apache.solr.logging.MDCLoggingContext;
 import org.apache.solr.update.UpdateLog;
 import org.apache.zookeeper.CreateMode;
@@ -188,6 +190,7 @@ public class ZkController {
 
   private LeaderElector overseerElector;
 
+  private Map<String, ReplicateFromLeader> replicateFromLeaders = new ConcurrentHashMap<>();
 
   // for now, this can be null in tests, in which case recovery will be inactive, and other features
   // may accept defaults or use mocks rather than pulling things from a CoreContainer
@@ -231,13 +234,13 @@ public class ZkController {
 
     public Object call() throws Exception {
       log.info("Registering core {} afterExpiration? {}", descriptor.getName(), afterExpiration);
-      register(descriptor.getName(), descriptor, recoverReloadedCores, afterExpiration);
+      register(descriptor.getName(), descriptor, recoverReloadedCores, afterExpiration, false);
       return descriptor;
     }
   }
 
   // notifies registered listeners after the ZK reconnect in the background
-  private class OnReconnectNotifyAsync implements Callable {
+  private static class OnReconnectNotifyAsync implements Callable {
 
     private final OnReconnect listener;
 
@@ -324,6 +327,7 @@ public class ZkController {
                 ElectionContext prevContext = overseerElector.getContext();
                 if (prevContext != null) {
                   prevContext.cancelElection();
+                  prevContext.close();
                 }
 
                 overseerElector.setup(context);
@@ -354,7 +358,7 @@ public class ZkController {
                     if (executorService != null) {
                       executorService.submit(new RegisterCoreAsync(descriptor, true, true));
                     } else {
-                      register(descriptor.getName(), descriptor, true, true);
+                      register(descriptor.getName(), descriptor, true, true, false);
                     }
                   } catch (Exception e) {
                     SolrException.log(log, "Error registering SolrCore", e);
@@ -418,6 +422,8 @@ public class ZkController {
     });
 
     init(registerOnReconnect);
+    
+    assert ObjectReleaseTracker.track(this);
   }
 
   public int getLeaderVoteWait() {
@@ -532,11 +538,8 @@ public class ZkController {
       }
     } finally {
       try {
-        try {
-          overseer.close();
-        } catch (Exception e) {
-          log.error("Error closing overseer", e);
-        }
+        IOUtils.closeQuietly(overseerElector.getContext());
+        IOUtils.closeQuietly(overseer);
       } finally {
         try {
           try {
@@ -553,7 +556,7 @@ public class ZkController {
         }
       }
     }
-
+    assert ObjectReleaseTracker.release(this);
   }
 
   /**
@@ -840,8 +843,8 @@ public class ZkController {
    *
    * @return the shardId for the SolrCore
    */
-  public String register(String coreName, final CoreDescriptor desc) throws Exception {
-    return register(coreName, desc, false, false);
+  public String register(String coreName, final CoreDescriptor desc, boolean skipRecovery) throws Exception {
+    return register(coreName, desc, false, false, skipRecovery);
   }
 
 
@@ -850,7 +853,8 @@ public class ZkController {
    *
    * @return the shardId for the SolrCore
    */
-  public String register(String coreName, final CoreDescriptor desc, boolean recoverReloadedCores, boolean afterExpiration) throws Exception {
+  public String register(String coreName, final CoreDescriptor desc, boolean recoverReloadedCores,
+                         boolean afterExpiration, boolean skipRecovery) throws Exception {
     try (SolrCore core = cc.getCore(desc.getName())) {
       MDCLoggingContext.setCore(core);
     }
@@ -875,7 +879,7 @@ public class ZkController {
           coreName, baseUrl, cloudDesc.getCollectionName(), shardId);
       
       ZkNodeProps leaderProps = new ZkNodeProps(props);
-      
+
       try {
         // If we're a preferred leader, insert ourselves at the head of the queue
         boolean joinAtHead = false;
@@ -911,9 +915,16 @@ public class ZkController {
         // leader election perhaps?
         
         UpdateLog ulog = core.getUpdateHandler().getUpdateLog();
-        
+        boolean onlyLeaderIndexes = zkStateReader.getClusterState().getCollection(collection).getRealtimeReplicas() == 1;
+        boolean isReplicaInOnlyLeaderIndexes = onlyLeaderIndexes && !isLeader;
+        if (isReplicaInOnlyLeaderIndexes) {
+          String commitVersion = ReplicateFromLeader.getCommitVersion(core);
+          if (commitVersion != null) {
+            ulog.copyOverOldUpdates(Long.parseLong(commitVersion));
+          }
+        }
         // we will call register again after zk expiration and on reload
-        if (!afterExpiration && !core.isReloaded() && ulog != null) {
+        if (!afterExpiration && !core.isReloaded() && ulog != null && !isReplicaInOnlyLeaderIndexes) {
           // disable recovery in case shard is in construction state (for shard splits)
           Slice slice = getClusterState().getSlice(collection, shardId);
           if (slice.getState() != Slice.State.CONSTRUCTION || !isLeader) {
@@ -929,9 +940,12 @@ public class ZkController {
             }
           }
         }
-        boolean didRecovery = checkRecovery(coreName, desc, recoverReloadedCores, isLeader, cloudDesc, collection,
-            coreZkNodeName, shardId, leaderProps, core, cc, afterExpiration);
+        boolean didRecovery
+            = checkRecovery(recoverReloadedCores, isLeader, skipRecovery, collection, coreZkNodeName, core, cc, afterExpiration);
         if (!didRecovery) {
+          if (isReplicaInOnlyLeaderIndexes) {
+            startReplicationFromLeader(coreName);
+          }
           publish(desc, Replica.State.ACTIVE);
         }
         
@@ -943,6 +957,20 @@ public class ZkController {
       return shardId;
     } finally {
       MDCLoggingContext.clear();
+    }
+  }
+
+  public void startReplicationFromLeader(String coreName) throws InterruptedException {
+    ReplicateFromLeader replicateFromLeader = new ReplicateFromLeader(cc, coreName);
+    if (replicateFromLeaders.putIfAbsent(coreName, replicateFromLeader) == null) {
+      replicateFromLeader.startReplication();
+    }
+  }
+
+  public void stopReplicationFromLeader(String coreName) {
+    ReplicateFromLeader replicateFromLeader = replicateFromLeaders.remove(coreName);
+    if (replicateFromLeader != null) {
+      replicateFromLeader.stopReplication();
     }
   }
 
@@ -1080,10 +1108,8 @@ public class ZkController {
   /**
    * Returns whether or not a recovery was started
    */
-  private boolean checkRecovery(String coreName, final CoreDescriptor desc,
-                                boolean recoverReloadedCores, final boolean isLeader,
-                                final CloudDescriptor cloudDesc, final String collection,
-                                final String shardZkNodeName, String shardId, ZkNodeProps leaderProps,
+  private boolean checkRecovery(boolean recoverReloadedCores, final boolean isLeader, boolean skipRecovery,
+                                final String collection, String shardId,
                                 SolrCore core, CoreContainer cc, boolean afterExpiration) {
     if (SKIP_AUTO_RECOVERY) {
       log.warn("Skipping recovery according to sys prop solrcloud.skip.autorecovery");
@@ -1092,7 +1118,7 @@ public class ZkController {
     boolean doRecovery = true;
     if (!isLeader) {
 
-      if (!afterExpiration && core.isReloaded() && !recoverReloadedCores) {
+      if (skipRecovery || (!afterExpiration && core.isReloaded() && !recoverReloadedCores)) {
         doRecovery = false;
       }
 
@@ -1142,7 +1168,7 @@ public class ZkController {
         MDCLoggingContext.setCore(core);
       }
     } else {
-      MDCLoggingContext.setCoreDescriptor(cd);
+      MDCLoggingContext.setCoreDescriptor(cc, cd);
     }
     try {
       String collection = cd.getCloudDescriptor().getCollectionName();
@@ -1207,6 +1233,9 @@ public class ZkController {
             }
           }
         }
+      } catch (SolrCoreInitializationException ex) {
+        // The core had failed to initialize (in a previous request, not this one), hence nothing to do here.
+        log.info("The core '{}' had failed to initialize before.", cd.getName());
       }
       
       ZkNodeProps m = new ZkNodeProps(props);
@@ -1257,6 +1286,7 @@ public class ZkController {
         OverseerAction.DELETECORE.toLower(), ZkStateReader.CORE_NAME_PROP, coreName,
         ZkStateReader.NODE_NAME_PROP, getNodeName(),
         ZkStateReader.COLLECTION_PROP, cloudDescriptor.getCollectionName(),
+        ZkStateReader.BASE_URL_PROP, getBaseUrl(),
         ZkStateReader.CORE_NODE_NAME_PROP, coreNodeName);
     overseerJobQueue.offer(Utils.toJSON(m));
   }
@@ -1272,130 +1302,6 @@ public class ZkController {
   // convenience for testing
   void printLayoutToStdOut() throws KeeperException, InterruptedException {
     zkClient.printLayoutToStdOut();
-  }
-
-  public void createCollectionZkNode(CloudDescriptor cd) {
-    String collection = cd.getCollectionName();
-
-    log.debug("Check for collection zkNode:" + collection);
-    String collectionPath = ZkStateReader.COLLECTIONS_ZKNODE + "/" + collection;
-
-    try {
-      if (!zkClient.exists(collectionPath, true)) {
-        log.debug("Creating collection in ZooKeeper:" + collection);
-
-        try {
-          Map<String, Object> collectionProps = new HashMap<>();
-
-          // TODO: if collection.configName isn't set, and there isn't already a conf in zk, just use that?
-          String defaultConfigName = System.getProperty(COLLECTION_PARAM_PREFIX + CONFIGNAME_PROP, collection);
-
-          // params passed in - currently only done via core admin (create core commmand).
-          if (cd.getParams().size() > 0) {
-            collectionProps.putAll(cd.getParams());
-            // if the config name wasn't passed in, use the default
-            if (!collectionProps.containsKey(CONFIGNAME_PROP)) {
-              // TODO: getting the configName from the collectionPath should fail since we already know it doesn't exist?
-              getConfName(collection, collectionPath, collectionProps);
-            }
-
-          } else if (System.getProperty("bootstrap_confdir") != null) {
-            // if we are bootstrapping a collection, default the config for
-            // a new collection to the collection we are bootstrapping
-            log.info("Setting config for collection:" + collection + " to " + defaultConfigName);
-
-            Properties sysProps = System.getProperties();
-            for (String sprop : System.getProperties().stringPropertyNames()) {
-              if (sprop.startsWith(COLLECTION_PARAM_PREFIX)) {
-                collectionProps.put(sprop.substring(COLLECTION_PARAM_PREFIX.length()), sysProps.getProperty(sprop));
-              }
-            }
-
-            // if the config name wasn't passed in, use the default
-            if (!collectionProps.containsKey(CONFIGNAME_PROP))
-              collectionProps.put(CONFIGNAME_PROP, defaultConfigName);
-
-          } else if (Boolean.getBoolean("bootstrap_conf")) {
-            // the conf name should should be the collection name of this core
-            collectionProps.put(CONFIGNAME_PROP, cd.getCollectionName());
-          } else {
-            getConfName(collection, collectionPath, collectionProps);
-          }
-
-          collectionProps.remove(ZkStateReader.NUM_SHARDS_PROP);  // we don't put numShards in the collections properties
-
-          ZkNodeProps zkProps = new ZkNodeProps(collectionProps);
-          zkClient.makePath(collectionPath, Utils.toJSON(zkProps), CreateMode.PERSISTENT, null, true);
-
-        } catch (KeeperException e) {
-          // it's okay if the node already exists
-          if (e.code() != KeeperException.Code.NODEEXISTS) {
-            throw e;
-          }
-        }
-      } else {
-        log.debug("Collection zkNode exists");
-      }
-
-    } catch (KeeperException e) {
-      // it's okay if another beats us creating the node
-      if (e.code() == KeeperException.Code.NODEEXISTS) {
-        return;
-      }
-      throw new SolrException(ErrorCode.SERVER_ERROR, "Error creating collection node in Zookeeper", e);
-    } catch (InterruptedException e) {
-      Thread.interrupted();
-      throw new SolrException(ErrorCode.SERVER_ERROR, "Error creating collection node in Zookeeper", e);
-    }
-
-  }
-
-
-  private void getConfName(String collection, String collectionPath,
-                           Map<String, Object> collectionProps) throws KeeperException,
-      InterruptedException {
-    // check for configName
-    log.debug("Looking for collection configName");
-    List<String> configNames = null;
-    int retry = 1;
-    int retryLimt = 6;
-    for (; retry < retryLimt; retry++) {
-      if (zkClient.exists(collectionPath, true)) {
-        ZkNodeProps cProps = ZkNodeProps.load(zkClient.getData(collectionPath, null, null, true));
-        if (cProps.containsKey(CONFIGNAME_PROP)) {
-          break;
-        }
-      }
-
-      // if there is only one conf, use that
-      try {
-        configNames = zkClient.getChildren(ZkConfigManager.CONFIGS_ZKNODE, null,
-            true);
-      } catch (NoNodeException e) {
-        // just keep trying
-      }
-      if (configNames != null && configNames.size() == 1) {
-        // no config set named, but there is only 1 - use it
-        log.info("Only one config set found in zk - using it:" + configNames.get(0));
-        collectionProps.put(CONFIGNAME_PROP, configNames.get(0));
-        break;
-      }
-
-      if (configNames != null && configNames.contains(collection)) {
-        log.info("Could not find explicit collection configName, but found config name matching collection name - using that set.");
-        collectionProps.put(CONFIGNAME_PROP, collection);
-        break;
-      }
-
-      log.info("Could not find collection configName - pausing for 3 seconds and trying again - try: " + retry);
-      Thread.sleep(3000);
-    }
-    if (retry == retryLimt) {
-      log.error("Could not find configName for collection " + collection);
-      throw new ZooKeeperException(
-          SolrException.ErrorCode.SERVER_ERROR,
-          "Could not find configName for collection " + collection + " found:" + configNames);
-    }
   }
 
   public ZkStateReader getZkStateReader() {
@@ -1548,13 +1454,7 @@ public class ZkController {
             errorMessage.set("coreNodeName " + coreNodeName + " does not exist in shard " + cloudDesc.getShardId());
             return false;
           }
-          String baseUrl = replica.getStr(BASE_URL_PROP);
-          String coreName = replica.getStr(CORE_NAME_PROP);
-          if (baseUrl.equals(this.baseURL) && coreName.equals(cd.getName())) {
-            return true;
-          }
-          errorMessage.set("coreNodeName " + coreNodeName + " exists, but does not match expected node or core name");
-          return false;
+          return true;
         });
       } catch (TimeoutException e) {
         String error = errorMessage.get();
@@ -1839,7 +1739,7 @@ public class ZkController {
           //however delete it . This is possible when the last attempt at deleting the election node failed.
           if (electionNode.startsWith(getNodeName())) {
             try {
-              zkClient.delete(OverseerElectionContext.OVERSEER_ELECT + LeaderElector.ELECTION_NODE + "/" + electionNode, -1, true);
+              zkClient.delete(Overseer.OVERSEER_ELECT + LeaderElector.ELECTION_NODE + "/" + electionNode, -1, true);
             } catch (NoNodeException e) {
               //no problem
             } catch (InterruptedException e) {
@@ -1888,7 +1788,7 @@ public class ZkController {
         elect.setup(context);
         electionContexts.put(contextKey, context);
         
-        elect.retryElection(context, params.getBool(REJOIN_AT_HEAD_PROP));
+        elect.retryElection(context, params.getBool(REJOIN_AT_HEAD_PROP, false));
       }
     } catch (Exception e) {
       throw new SolrException(ErrorCode.SERVER_ERROR, "Unable to rejoin election", e);
@@ -2176,7 +2076,8 @@ public class ZkController {
     } else {
       String parentZNodePath = getLeaderInitiatedRecoveryZnodePath(collection, shardId);
       try {
-        zkClient.makePath(parentZNodePath, retryOnConnLoss);
+        // make sure we don't create /collections/{collection} if they do not exist with 2 param
+        zkClient.makePath(parentZNodePath, (byte[]) null, CreateMode.PERSISTENT, (Watcher) null, true, retryOnConnLoss, 2);
       } catch (KeeperException.NodeExistsException nee) {
         // if it exists, that's great!
       }

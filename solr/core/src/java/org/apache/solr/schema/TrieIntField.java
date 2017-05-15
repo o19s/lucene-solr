@@ -45,7 +45,7 @@ import org.apache.lucene.util.mutable.MutableValueInt;
  */
 public class TrieIntField extends TrieField implements IntValueFieldType {
   {
-    type=TrieTypes.INTEGER;
+    type = NumberType.INTEGER;
   }
 
   @Override
@@ -80,6 +80,7 @@ public class TrieIntField extends TrieField implements IntValueFieldType {
               throw new IllegalArgumentException("docs out of order: lastDocID=" + lastDocID + " docID=" + docID);
             }
             if (docID > view.docID()) {
+              lastDocID = docID;
               return docID == view.advance(docID);
             } else {
               return docID == view.docID();

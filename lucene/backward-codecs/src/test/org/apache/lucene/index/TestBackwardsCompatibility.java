@@ -25,13 +25,18 @@ import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.text.ParsePosition;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -62,6 +67,8 @@ import org.apache.lucene.legacy.LegacyNumericUtils;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.Sort;
+import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.store.BaseDirectoryWrapper;
 import org.apache.lucene.store.Directory;
@@ -157,12 +164,64 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     for(int i=0;i<50;i++) {
       writer.addDocument(docs.nextDoc());
     }
+    docs.close();
     writer.close();
     dir.close();
 
     // Gives you time to copy the index out!: (there is also
     // a test option to not remove temp dir...):
     Thread.sleep(100000);
+  }
+
+  // ant test -Dtestcase=TestBackwardsCompatibility -Dtestmethod=testCreateSortedIndex -Dtests.codec=default -Dtests.useSecurityManager=false -Dtests.bwcdir=/tmp/sorted
+  public void testCreateSortedIndex() throws Exception {
+    
+    Path indexDir = getIndexDir().resolve("sorted");
+    Files.deleteIfExists(indexDir);
+    Directory dir = newFSDirectory(indexDir);
+
+    LogByteSizeMergePolicy mp = new LogByteSizeMergePolicy();
+    mp.setNoCFSRatio(1.0);
+    mp.setMaxCFSSegmentSizeMB(Double.POSITIVE_INFINITY);
+    MockAnalyzer analyzer = new MockAnalyzer(random());
+    analyzer.setMaxTokenLength(TestUtil.nextInt(random(), 1, IndexWriter.MAX_TERM_LENGTH));
+
+    // TODO: remove randomness
+    IndexWriterConfig conf = new IndexWriterConfig(analyzer);
+    conf.setMergePolicy(mp);
+    conf.setUseCompoundFile(false);
+    conf.setIndexSort(new Sort(new SortField("dateDV", SortField.Type.LONG, true)));
+    IndexWriter writer = new IndexWriter(dir, conf);
+    LineFileDocs docs = new LineFileDocs(random());
+    SimpleDateFormat parser = new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT);
+    parser.setTimeZone(TimeZone.getTimeZone("UTC"));
+    ParsePosition position = new ParsePosition(0);
+    Field dateDVField = null;
+    for(int i=0;i<50;i++) {
+      Document doc = docs.nextDoc();
+      String dateString = doc.get("date");
+      
+      position.setIndex(0);
+      Date date = parser.parse(dateString, position);
+      if (position.getErrorIndex() != -1) {
+        throw new AssertionError("failed to parse \"" + dateString + "\" as date");
+      }
+      if (position.getIndex() != dateString.length()) {
+        throw new AssertionError("failed to parse \"" + dateString + "\" as date");
+      }
+      if (dateDVField == null) {
+        dateDVField = new NumericDocValuesField("dateDV", 0l);
+        doc.add(dateDVField);
+      }
+      dateDVField.setLongValue(date.getTime());
+      if (i == 250) {
+        writer.commit();
+      }      
+      writer.addDocument(doc);
+    }
+    writer.forceMerge(1);
+    writer.close();
+    dir.close();
   }
   
   private void updateNumeric(IndexWriter writer, String id, String f, String cf, long value) throws IOException {
@@ -230,7 +289,19 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     "6.2.0-cfs",
     "6.2.0-nocfs",
     "6.2.1-cfs",
-    "6.2.1-nocfs"
+    "6.2.1-nocfs",
+    "6.3.0-cfs",
+    "6.3.0-nocfs",
+    "6.4.0-cfs",
+    "6.4.0-nocfs",
+    "6.4.1-cfs",
+    "6.4.1-nocfs",
+    "6.4.2-cfs",
+    "6.4.2-nocfs",
+    "6.5.0-cfs",
+    "6.5.0-nocfs",
+    "6.5.1-cfs",
+    "6.5.1-nocfs"
   };
   
   final String[] unsupportedNames = {
@@ -361,7 +432,9 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
       "5.5.2-cfs",
       "5.5.2-nocfs",
       "5.5.3-cfs",
-      "5.5.3-nocfs"
+      "5.5.3-nocfs",
+      "5.5.4-cfs",
+      "5.5.4-nocfs"
   };
 
   // TODO: on 6.0.0 release, gen the single segment indices and add here:
@@ -622,10 +695,18 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
         System.out.println("\nTEST: index=" + name);
       }
       Directory dir = newDirectory(oldIndexDirs.get(name));
+
+      final SegmentInfos oldSegInfos = SegmentInfos.readLatestCommit(dir);
+
       IndexWriter w = new IndexWriter(dir, new IndexWriterConfig(new MockAnalyzer(random())));
       w.forceMerge(1);
       w.close();
-      
+
+      final SegmentInfos segInfos = SegmentInfos.readLatestCommit(dir);
+      assertEquals(oldSegInfos.getIndexCreatedVersionMajor(), segInfos.getIndexCreatedVersionMajor());
+      assertEquals(Version.LATEST, segInfos.asList().get(0).info.getVersion());
+      assertEquals(oldSegInfos.asList().get(0).info.getMinVersion(), segInfos.asList().get(0).info.getMinVersion());
+
       dir.close();
     }
   }
@@ -635,13 +716,31 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
       if (VERBOSE) {
         System.out.println("\nTEST: old index " + name);
       }
+      Directory oldDir = oldIndexDirs.get(name);
+      SegmentInfos infos = SegmentInfos.readLatestCommit(oldDir);
+
       Directory targetDir = newDirectory();
+      if (infos.getCommitLuceneVersion().major != Version.LATEST.major) {
+        // both indexes are not compatible
+        Directory targetDir2 = newDirectory();
+        IndexWriter w = new IndexWriter(targetDir2, newIndexWriterConfig(new MockAnalyzer(random())));
+        IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> w.addIndexes(oldDir));
+        assertTrue(e.getMessage(), e.getMessage().startsWith("Cannot use addIndexes(Directory) with indexes that have been created by a different Lucene version."));
+        w.close();
+        targetDir2.close();
+
+        // for the next test, we simulate writing to an index that was created on the same major version
+        new SegmentInfos(infos.getIndexCreatedVersionMajor()).commit(targetDir);
+      }
+
       IndexWriter w = new IndexWriter(targetDir, newIndexWriterConfig(new MockAnalyzer(random())));
-      w.addIndexes(oldIndexDirs.get(name));
+      w.addIndexes(oldDir);
+      w.close();
+      targetDir.close();
+
       if (VERBOSE) {
         System.out.println("\nTEST: done adding indices; now close");
       }
-      w.close();
       
       targetDir.close();
     }
@@ -649,9 +748,22 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
 
   public void testAddOldIndexesReader() throws IOException {
     for (String name : oldNames) {
-      DirectoryReader reader = DirectoryReader.open(oldIndexDirs.get(name));
+      Directory oldDir = oldIndexDirs.get(name);
+      SegmentInfos infos = SegmentInfos.readLatestCommit(oldDir);
+      DirectoryReader reader = DirectoryReader.open(oldDir);
       
       Directory targetDir = newDirectory();
+      if (infos.getCommitLuceneVersion().major != Version.LATEST.major) {
+        Directory targetDir2 = newDirectory();
+        IndexWriter w = new IndexWriter(targetDir2, newIndexWriterConfig(new MockAnalyzer(random())));
+        IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> TestUtil.addIndexesSlowly(w, reader));
+        assertEquals(e.getMessage(), "Cannot merge a segment that has been created with major version 6 into this index which has been created by major version 7");
+        w.close();
+        targetDir2.close();
+
+        // for the next test, we simulate writing to an index that was created on the same major version
+        new SegmentInfos(infos.getIndexCreatedVersionMajor()).commit(targetDir);
+      }
       IndexWriter w = new IndexWriter(targetDir, newIndexWriterConfig(new MockAnalyzer(random())));
       TestUtil.addIndexesSlowly(w, reader);
       w.close();
@@ -1154,6 +1266,16 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     }
   }
 
+  public void testIndexCreatedVersion() throws IOException {
+    for (String name : oldNames) {
+      Directory dir = oldIndexDirs.get(name);
+      SegmentInfos infos = SegmentInfos.readLatestCommit(dir);
+      // those indexes are created by a single version so we can
+      // compare the commit version with the created version
+      assertEquals(infos.getCommitLuceneVersion().major, infos.getIndexCreatedVersionMajor());
+    }
+  }
+
   public void verifyUsesDefaultCodec(Directory dir, String name) throws Exception {
     DirectoryReader r = DirectoryReader.open(dir);
     for (LeafReaderContext context : r.leaves()) {
@@ -1217,7 +1339,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     }
   }
   
-  private int checkAllSegmentsUpgraded(Directory dir) throws IOException {
+  private int checkAllSegmentsUpgraded(Directory dir, int indexCreatedVersion) throws IOException {
     final SegmentInfos infos = SegmentInfos.readLatestCommit(dir);
     if (VERBOSE) {
       System.out.println("checkAllSegmentsUpgraded: " + infos);
@@ -1226,6 +1348,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
       assertEquals(Version.LATEST, si.info.getVersion());
     }
     assertEquals(Version.LATEST, infos.getCommitLuceneVersion());
+    assertEquals(indexCreatedVersion, infos.getIndexCreatedVersionMajor());
     return infos.size();
   }
   
@@ -1243,10 +1366,11 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
         System.out.println("testUpgradeOldIndex: index=" +name);
       }
       Directory dir = newDirectory(oldIndexDirs.get(name));
+      int indexCreatedVersion = SegmentInfos.readLatestCommit(dir).getIndexCreatedVersionMajor();
 
       newIndexUpgrader(dir).upgrade();
 
-      checkAllSegmentsUpgraded(dir);
+      checkAllSegmentsUpgraded(dir, indexCreatedVersion);
       
       dir.close();
     }
@@ -1257,7 +1381,9 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     PrintStream savedSystemOut = System.out;
     System.setOut(new PrintStream(new ByteArrayOutputStream(), false, "UTF-8"));
     try {
-      for (String name : oldIndexDirs.keySet()) {
+      for (Map.Entry<String,Directory> entry : oldIndexDirs.entrySet()) {
+        String name = entry.getKey();
+        int indexCreatedVersion = SegmentInfos.readLatestCommit(entry.getValue()).getIndexCreatedVersionMajor();
         Path dir = createTempDir(name);
         TestUtil.unzip(getDataInputStream("index." + name + ".zip"), dir);
         
@@ -1293,7 +1419,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
         
         Directory upgradedDir = newFSDirectory(dir);
         try {
-          checkAllSegmentsUpgraded(upgradedDir);
+          checkAllSegmentsUpgraded(upgradedDir, indexCreatedVersion);
         } finally {
           upgradedDir.close();
         }
@@ -1310,6 +1436,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
       }
       Directory dir = newDirectory(oldIndexDirs.get(name));
       assertEquals("Original index must be single segment", 1, getNumberOfSegments(dir));
+      int indexCreatedVersion = SegmentInfos.readLatestCommit(dir).getIndexCreatedVersionMajor();
 
       // create a bunch of dummy segments
       int id = 40;
@@ -1351,7 +1478,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
       assertEquals(1, DirectoryReader.listCommits(dir).size());
       newIndexUpgrader(dir).upgrade();
 
-      final int segCount = checkAllSegmentsUpgraded(dir);
+      final int segCount = checkAllSegmentsUpgraded(dir, indexCreatedVersion);
       assertEquals("Index must still contain the same number of segments, as only one segment was upgraded and nothing else merged",
         origSegCount, segCount);
       
@@ -1368,7 +1495,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
 
     newIndexUpgrader(dir).upgrade();
 
-    checkAllSegmentsUpgraded(dir);
+    checkAllSegmentsUpgraded(dir, 6);
     
     dir.close();
   }
@@ -1477,6 +1604,30 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
       writer.addDocument(new Document());
       writer.commit();
       writer.close();
+      dir.close();
+    }
+  }
+
+  public void testSortedIndex() throws Exception {
+    String[] versions = new String[] {"6.2.0", "6.2.1", "6.3.0"};
+    for(String version : versions) {
+      Path path = createTempDir("sorted");
+      InputStream resource = TestBackwardsCompatibility.class.getResourceAsStream("sorted." + version + ".zip");
+      assertNotNull("Sorted index index " + version + " not found", resource);
+      TestUtil.unzip(resource, path);
+
+      // TODO: more tests
+      Directory dir = newFSDirectory(path);
+
+      DirectoryReader reader = DirectoryReader.open(dir);
+      assertEquals(1, reader.leaves().size());
+      Sort sort = reader.leaves().get(0).reader().getMetaData().getSort();
+      assertNotNull(sort);
+      assertEquals("<long: \"dateDV\">!", sort.toString());
+      reader.close();
+
+      // this will confirm the docs really are sorted:
+      TestUtil.checkIndex(dir);
       dir.close();
     }
   }

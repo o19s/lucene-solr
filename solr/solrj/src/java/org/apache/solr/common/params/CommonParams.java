@@ -180,13 +180,15 @@ public interface CommonParams {
   String AUTHZ_PATH = "/admin/authorization";
   String AUTHC_PATH = "/admin/authentication";
   String ZK_PATH = "/admin/zookeeper";
+  String METRICS_PATH = "/admin/metrics";
 
   Set<String> ADMIN_PATHS = new HashSet<>(Arrays.asList(
       CORES_HANDLER_PATH,
       COLLECTIONS_HANDLER_PATH,
       CONFIGSETS_HANDLER_PATH,
       AUTHC_PATH,
-      AUTHZ_PATH));
+      AUTHZ_PATH,
+      METRICS_PATH));
 
   /** valid values for: <code>echoParams</code> */
   enum EchoParamStyle {
@@ -257,5 +259,9 @@ public interface CommonParams {
 
   String NAME = "name";
   String VALUE_LONG = "val";
+
+  String VERSION_FIELD="_version_";
+
+  String ID = "id";
 }
 

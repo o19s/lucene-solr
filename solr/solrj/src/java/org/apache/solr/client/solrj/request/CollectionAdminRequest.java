@@ -18,6 +18,7 @@ package org.apache.solr.client.solrj.request;
 
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.UUID;
@@ -45,6 +46,8 @@ import org.apache.solr.common.util.ContentStream;
 import org.apache.solr.common.util.NamedList;
 
 import static org.apache.solr.common.params.CollectionAdminParams.COUNT_PROP;
+import static org.apache.solr.common.params.CollectionAdminParams.CREATE_NODE_SET_PARAM;
+import static org.apache.solr.common.params.CollectionAdminParams.CREATE_NODE_SET_SHUFFLE_PARAM;
 
 /**
  * This class is experimental and subject to change.
@@ -190,6 +193,10 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     @Deprecated
     public abstract AsyncCollectionSpecificAdminRequest setCollectionName(String collection);
 
+    public String getCollectionName() {
+      return collection;
+    }
+
     @Override
     public SolrParams getParams() {
       ModifiableSolrParams params = new ModifiableSolrParams(super.getParams());
@@ -275,6 +282,8 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
 
     public CollectionAdminRoleRequest(CollectionAction action, String node, String role) {
       super(action);
+      this.node = node;
+      this.role = role;
     }
 
     @Override
@@ -359,6 +368,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
 
     private Properties properties;
     protected Boolean autoAddReplicas;
+    protected Integer realtimeReplicas;
     protected Integer stateFormat;
     private String[] rule , snitch;
 
@@ -400,6 +410,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     public Create setNumShards(Integer numShards) {this.numShards = numShards; return this; }
     public Create setMaxShardsPerNode(Integer numShards) { this.maxShardsPerNode = numShards; return this; }
     public Create setAutoAddReplicas(boolean autoAddReplicas) { this.autoAddReplicas = autoAddReplicas; return this; }
+    public Create setRealtimeReplicas(Integer realtimeReplicas) { this.realtimeReplicas = realtimeReplicas; return this;}
     @Deprecated
     public Create setReplicationFactor(Integer repl) { this.replicationFactor = repl; return this; }
     public Create setStateFormat(Integer stateFormat) { this.stateFormat = stateFormat; return this; }
@@ -414,6 +425,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     public Integer getMaxShardsPerNode() { return maxShardsPerNode; }
     public Integer getReplicationFactor() { return replicationFactor; }
     public Boolean getAutoAddReplicas() { return autoAddReplicas; }
+    public Integer getRealtimeReplicas() { return realtimeReplicas; }
     public Integer getStateFormat() { return stateFormat; }
     
     /**
@@ -460,6 +472,19 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       return this;
     }
 
+    public Create setProperties(Map<String, String> properties) {
+      this.properties = new Properties();
+      this.properties.putAll(properties);
+      return this;
+    }
+
+    public Create withProperty(String key, String value) {
+      if (this.properties == null)
+        this.properties = new Properties();
+      this.properties.setProperty(key, value);
+      return this;
+    }
+
     @Override
     public SolrParams getParams() {
       ModifiableSolrParams params = (ModifiableSolrParams) super.getParams();
@@ -467,7 +492,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       if (configName != null)
         params.set("collection.configName", configName);
       if (createNodeSet != null)
-        params.set("createNodeSet", createNodeSet);
+        params.set(CREATE_NODE_SET_PARAM, createNodeSet);
       if (numShards != null) {
         params.set( ZkStateReader.NUM_SHARDS_PROP, numShards);
       }
@@ -486,6 +511,9 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       }
       if (autoAddReplicas != null) {
         params.set(ZkStateReader.AUTO_ADD_REPLICAS, autoAddReplicas);
+      }
+      if (realtimeReplicas != null) {
+        params.set(ZkStateReader.REALTIME_REPLICAS, realtimeReplicas);
       }
       if(properties != null) {
         addProperties(params, properties);
@@ -586,6 +614,44 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     }
 
   }
+
+  public static class MoveReplica extends AsyncCollectionAdminRequest {
+    String collection, replica, targetNode;
+    String shard, fromNode;
+    boolean randomlyMoveReplica;
+
+    public MoveReplica(String collection, String replica, String targetNode) {
+      super(CollectionAction.MOVEREPLICA);
+      this.collection = collection;
+      this.replica = replica;
+      this.targetNode = targetNode;
+      this.randomlyMoveReplica = false;
+    }
+
+    public MoveReplica(String collection, String shard, String fromNode, String targetNode) {
+      super(CollectionAction.MOVEREPLICA);
+      this.collection = collection;
+      this.shard = shard;
+      this.fromNode = fromNode;
+      this.targetNode = targetNode;
+      this.randomlyMoveReplica = true;
+    }
+
+    @Override
+    public SolrParams getParams() {
+      ModifiableSolrParams params = (ModifiableSolrParams) super.getParams();
+      params.set("collection", collection);
+      params.set("targetNode", targetNode);
+      if (randomlyMoveReplica) {
+        params.set("shard", shard);
+        params.set("fromNode", fromNode);
+      } else {
+        params.set("replica", replica);
+      }
+      return params;
+    }
+  }
+
 
   /*
    * Returns a RebalanceLeaders object to rebalance leaders for a collection
@@ -692,12 +758,15 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
   // BACKUP request
   public static class Backup extends AsyncCollectionSpecificAdminRequest {
     protected final String name;
-    protected Optional<String> repositoryName;
+    protected Optional<String> repositoryName = Optional.empty();
     protected String location;
+    protected Optional<String> commitName = Optional.empty();
+    protected Optional<String> indexBackupStrategy = Optional.empty();
 
     public Backup(String collection, String name) {
       super(CollectionAction.BACKUP, collection);
       this.name = name;
+      this.repositoryName = Optional.empty();
     }
 
     @Override
@@ -732,6 +801,24 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       return this;
     }
 
+    public Optional<String> getCommitName() {
+      return commitName;
+    }
+
+    public Backup setCommitName(String commitName) {
+      this.commitName = Optional.ofNullable(commitName);
+      return this;
+    }
+
+    public Optional<String> getIndexBackupStrategy() {
+      return indexBackupStrategy;
+    }
+
+    public Backup setIndexBackupStrategy(String indexBackupStrategy) {
+      this.indexBackupStrategy = Optional.ofNullable(indexBackupStrategy);
+      return this;
+    }
+
     @Override
     public SolrParams getParams() {
       ModifiableSolrParams params = (ModifiableSolrParams) super.getParams();
@@ -740,6 +827,12 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       params.set(CoreAdminParams.BACKUP_LOCATION, location); //note: optional
       if (repositoryName.isPresent()) {
         params.set(CoreAdminParams.BACKUP_REPOSITORY, repositoryName.get());
+      }
+      if (commitName.isPresent()) {
+        params.set(CoreAdminParams.COMMIT_NAME, commitName.get());
+      }
+      if (indexBackupStrategy.isPresent()) {
+        params.set(CollectionAdminParams.INDEX_BACKUP_STRATEGY, indexBackupStrategy.get());
       }
       return params;
     }
@@ -753,7 +846,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
   // RESTORE request
   public static class Restore extends AsyncCollectionSpecificAdminRequest {
     protected final String backupName;
-    protected Optional<String> repositoryName;
+    protected Optional<String> repositoryName = Optional.empty();
     protected String location;
 
     // in common with collection creation:
@@ -761,6 +854,8 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     protected Integer maxShardsPerNode;
     protected Integer replicationFactor;
     protected Boolean autoAddReplicas;
+    protected Optional<String> createNodeSet = Optional.empty();
+    protected Optional<Boolean> createNodeSetShuffle = Optional.empty();
     protected Properties properties;
 
     public Restore(String collection, String backupName) {
@@ -798,6 +893,22 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       return this;
     }
 
+    public void setCreateNodeSet(String createNodeSet) {
+      this.createNodeSet = Optional.of(createNodeSet);
+    }
+
+    public Optional<String> getCreateNodeSet() {
+      return createNodeSet;
+    }
+
+    public Optional<Boolean> getCreateNodeSetShuffle() {
+      return createNodeSetShuffle;
+    }
+
+    public void setCreateNodeSetShuffle(boolean createNodeSetShuffle) {
+      this.createNodeSetShuffle = Optional.of(createNodeSetShuffle);
+    }
+
     // Collection creation params in common:
     public Restore setConfigName(String config) { this.configName = config; return this; }
     public String getConfigName()  { return configName; }
@@ -816,7 +927,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     }
     public Restore setProperties(Properties properties) { this.properties = properties; return this;}
 
-    // TODO support createNodeSet, rule, snitch
+    // TODO support rule, snitch
 
     @Override
     public SolrParams getParams() {
@@ -840,10 +951,115 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       if (repositoryName.isPresent()) {
         params.set(CoreAdminParams.BACKUP_REPOSITORY, repositoryName.get());
       }
+      if (createNodeSet.isPresent()) {
+        params.set(CREATE_NODE_SET_PARAM, createNodeSet.get());
+      }
+      if (createNodeSetShuffle.isPresent()) {
+        params.set(CREATE_NODE_SET_SHUFFLE_PARAM, createNodeSetShuffle.get());
+      }
 
       return params;
     }
 
+  }
+
+  //Note : This method is added since solrj module does not use Google
+  // guava library. Also changes committed for SOLR-8765 result in wrong
+  // error message when "collection" parameter is specified as Null.
+  // This is because the setCollectionName method is deprecated.
+  static <T> T checkNotNull(String param, T value) {
+    if (value == null) {
+      throw new NullPointerException("Please specify a value for parameter " + param);
+    }
+    return value;
+  }
+
+  @SuppressWarnings("serial")
+  public static class CreateSnapshot extends AsyncCollectionSpecificAdminRequest {
+    protected final String commitName;
+
+    public CreateSnapshot(String collection, String commitName) {
+      super(CollectionAction.CREATESNAPSHOT, checkNotNull(CoreAdminParams.COLLECTION ,collection));
+      this.commitName = checkNotNull(CoreAdminParams.COMMIT_NAME, commitName);
+    }
+
+    public String getCollectionName() {
+      return collection;
+    }
+
+    public String getCommitName() {
+      return commitName;
+    }
+
+    @Override
+    public AsyncCollectionSpecificAdminRequest setCollectionName (String collection) {
+      this.collection = checkNotNull(CoreAdminParams.COLLECTION ,collection);
+      return this;
+    }
+
+    @Override
+    public SolrParams getParams() {
+      ModifiableSolrParams params = (ModifiableSolrParams) super.getParams();
+      params.set(CoreAdminParams.COLLECTION, collection);
+      params.set(CoreAdminParams.COMMIT_NAME, commitName);
+      return params;
+    }
+  }
+
+  @SuppressWarnings("serial")
+  public static class DeleteSnapshot extends AsyncCollectionSpecificAdminRequest {
+    protected final String commitName;
+
+    public DeleteSnapshot (String collection, String commitName) {
+      super(CollectionAction.DELETESNAPSHOT, checkNotNull(CoreAdminParams.COLLECTION ,collection));
+      this.commitName = checkNotNull(CoreAdminParams.COMMIT_NAME, commitName);
+    }
+
+    public String getCollectionName() {
+      return collection;
+    }
+
+    public String getCommitName() {
+      return commitName;
+    }
+
+    @Override
+    public AsyncCollectionSpecificAdminRequest setCollectionName (String collection) {
+      this.collection = checkNotNull(CoreAdminParams.COLLECTION ,collection);
+      return this;
+    }
+
+    @Override
+    public SolrParams getParams() {
+      ModifiableSolrParams params = (ModifiableSolrParams) super.getParams();
+      params.set(CoreAdminParams.COLLECTION, collection);
+      params.set(CoreAdminParams.COMMIT_NAME, commitName);
+      return params;
+    }
+  }
+
+  @SuppressWarnings("serial")
+  public static class ListSnapshots extends AsyncCollectionSpecificAdminRequest {
+    public ListSnapshots (String collection) {
+      super(CollectionAction.LISTSNAPSHOTS, checkNotNull(CoreAdminParams.COLLECTION ,collection));
+    }
+
+    public String getCollectionName() {
+      return collection;
+    }
+
+    @Override
+    public AsyncCollectionSpecificAdminRequest setCollectionName (String collection) {
+      this.collection = checkNotNull(CoreAdminParams.COLLECTION ,collection);
+      return this;
+    }
+
+    @Override
+    public SolrParams getParams() {
+      ModifiableSolrParams params = (ModifiableSolrParams) super.getParams();
+      params.set(CoreAdminParams.COLLECTION, collection);
+      return params;
+    }
   }
 
   /**
@@ -921,7 +1137,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     public SolrParams getParams() {
       ModifiableSolrParams params = (ModifiableSolrParams) super.getParams();
       if (nodeSet != null) {
-        params.set("createNodeSet", nodeSet);
+        params.set(CREATE_NODE_SET_PARAM, nodeSet);
       }
       if (properties != null) {
         addProperties(params, properties);
@@ -1472,6 +1688,13 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
 
     public AddReplica setProperties(Properties properties) {
       this.properties = properties;
+      return this;
+    }
+
+    public AddReplica withProperty(String key, String value) {
+      if (this.properties == null)
+        this.properties = new Properties();
+      this.properties.setProperty(key, value);
       return this;
     }
 
@@ -2049,11 +2272,26 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
 
   }
 
+  // LISTALIASES request
+  public static class ListAliases extends CollectionAdminRequest<CollectionAdminResponse> {
+
+    public ListAliases() {
+      super(CollectionAction.LISTALIASES);
+    }
+
+    @Override
+    protected CollectionAdminResponse createResponse(SolrClient client) {
+      return new CollectionAdminResponse();
+    }
+
+  }
+
   /**
    * Returns a SolrRequest to get a list of collections in the cluster
    */
-  public static List listCollections() {
-    return new List();
+  public static java.util.List<String> listCollections(SolrClient client) throws IOException, SolrServerException {
+    CollectionAdminResponse resp = new List().process(client);
+    return (java.util.List<String>) resp.getResponse().get("collections");
   }
 
   // LIST request

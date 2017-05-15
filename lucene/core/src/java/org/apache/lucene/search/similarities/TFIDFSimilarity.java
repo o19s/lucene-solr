@@ -369,49 +369,9 @@ import org.apache.lucene.util.BytesRef;
  *
  *    <li>
  *      <A NAME="formula_norm"></A>
- *      <b><i>norm(t,d)</i></b> encapsulates a few (indexing time) boost and length factors:
- *
- *      <ul>
- *        <li><b>Field boost</b> - set by calling
- *        {@link org.apache.lucene.document.Field#setBoost(float) field.setBoost()}
- *        before adding the field to a document.
- *        </li>
- *        <li><b>lengthNorm</b> - computed
- *        when the document is added to the index in accordance with the number of tokens
- *        of this field in the document, so that shorter fields contribute more to the score.
- *        LengthNorm is computed by the Similarity class in effect at indexing.
- *        </li>
- *      </ul>
- *      The {@link #computeNorm} method is responsible for
- *      combining all of these factors into a single float.
- *
- *      <p>
- *      When a document is added to the index, all the above factors are multiplied.
- *      If the document has multiple fields with the same name, all their boosts are multiplied together:
- *
- *      <br>&nbsp;<br>
- *      <table cellpadding="1" cellspacing="0" border="0" style="width:auto; margin-left:auto; margin-right:auto" summary="index-time normalization">
- *        <tr>
- *          <td valign="middle" align="right" rowspan="1">
- *            norm(t,d) &nbsp; = &nbsp;
- *            lengthNorm
- *            &nbsp;&middot;&nbsp;
- *          </td>
- *          <td valign="bottom" align="center" rowspan="1" style="text-align: center">
- *            <big><big><big>&prod;</big></big></big>
- *          </td>
- *          <td valign="middle" align="right" rowspan="1">
- *            {@link org.apache.lucene.index.IndexableField#boost() f.boost}()
- *          </td>
- *        </tr>
- *        <tr valign="top">
- *          <td></td>
- *          <td align="center" style="text-align: center"><small>field <i><b>f</b></i> in <i>d</i> named as <i><b>t</b></i></small></td>
- *          <td></td>
- *        </tr>
- *      </table>
- *      Note that search time is too late to modify this <i>norm</i> part of scoring, 
- *      e.g. by using a different {@link Similarity} for search.
+ *      <b><i>norm(t,d)</i></b> is an index-time boost factor that solely
+ *      depends on the number of tokens of this field in the document, so
+ *      that shorter fields contribute more to the score.
  *    </li>
  * </ol>
  *
@@ -484,16 +444,14 @@ public abstract class TFIDFSimilarity extends Similarity {
    *         for each term.
    */
   public Explanation idfExplain(CollectionStatistics collectionStats, TermStatistics termStats[]) {
-    final long docCount = collectionStats.docCount() == -1 ? collectionStats.maxDoc() : collectionStats.docCount();
-    float idf = 0.0f;
+    double idf = 0d; // sum into a double before casting into a float
     List<Explanation> subs = new ArrayList<>();
     for (final TermStatistics stat : termStats ) {
-      final long df = stat.docFreq();
-      final float termIdf = idf(df, docCount);
-      subs.add(Explanation.match(termIdf, "idf(docFreq=" + df + ", docCount=" + docCount + ")"));
-      idf += termIdf;
+      Explanation idfExplain = idfExplain(collectionStats, stat);
+      subs.add(idfExplain);
+      idf += idfExplain.getValue();
     }
-    return Explanation.match(idf, "idf(), sum of:", subs);
+    return Explanation.match((float) idf, "idf(), sum of:", subs);
   }
 
   /** Computes a score factor based on a term's document frequency (the number
@@ -599,11 +557,7 @@ public abstract class TFIDFSimilarity extends Similarity {
         return raw;
       } else {
         long normValue;
-        int normsDocID = norms.docID();
-        if (normsDocID < doc) {
-          normsDocID = norms.advance(doc);
-        }
-        if (normsDocID == doc) {
+        if (norms.advanceExact(doc)) {
           normValue = norms.longValue();
         } else {
           normValue = 0;
@@ -649,7 +603,7 @@ public abstract class TFIDFSimilarity extends Similarity {
   private Explanation explainField(int doc, Explanation freq, IDFStats stats, NumericDocValues norms) throws IOException {
     Explanation tfExplanation = Explanation.match(tf(freq.getValue()), "tf(freq="+freq.getValue()+"), with freq of:", freq);
     float norm;
-    if (norms != null && norms.advance(doc) == doc) {
+    if (norms != null && norms.advanceExact(doc)) {
       norm = decodeNormValue(norms.longValue());
     } else {
       norm = 1f;

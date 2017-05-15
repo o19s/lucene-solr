@@ -456,15 +456,16 @@ class BufferedUpdatesStream implements Accountable {
       try {
         segStates[j].finish(pool);
       } catch (Throwable th) {
-        if (firstExc != null) {
+        if (firstExc == null) {
           firstExc = th;
         }
       }
     }
 
     if (success) {
-      // Does nothing if firstExc is null:
-      IOUtils.reThrow(firstExc);
+      if (firstExc != null) {
+        throw IOUtils.rethrowAlways(firstExc);
+      }
     }
 
     if (infoStream.isEnabled("BD")) {

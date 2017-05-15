@@ -58,6 +58,7 @@ import org.apache.solr.common.cloud.ZkConfigManager;
 import org.apache.solr.common.cloud.ZkCoreNodeProps;
 import org.apache.solr.common.cloud.ZkNodeProps;
 import org.apache.solr.common.cloud.ZkStateReader;
+import org.apache.solr.common.params.CollectionAdminParams;
 import org.apache.solr.common.params.CollectionParams.CollectionAction;
 import org.apache.solr.common.params.CoreAdminParams;
 import org.apache.solr.common.params.CoreAdminParams.CoreAdminAction;
@@ -104,9 +105,9 @@ public class OverseerCollectionMessageHandler implements OverseerMessageHandler 
   public static final String NUM_SLICES = "numShards";
 
   static final boolean CREATE_NODE_SET_SHUFFLE_DEFAULT = true;
-  public static final String CREATE_NODE_SET_SHUFFLE = "createNodeSet.shuffle";
+  public static final String CREATE_NODE_SET_SHUFFLE = CollectionAdminParams.CREATE_NODE_SET_SHUFFLE_PARAM;
   public static final String CREATE_NODE_SET_EMPTY = "EMPTY";
-  public static final String CREATE_NODE_SET = "createNodeSet";
+  public static final String CREATE_NODE_SET = CollectionAdminParams.CREATE_NODE_SET_PARAM;
 
   public static final String ROUTER = "router";
 
@@ -131,6 +132,7 @@ public class OverseerCollectionMessageHandler implements OverseerMessageHandler 
       ZkStateReader.REPLICATION_FACTOR, "1",
       ZkStateReader.MAX_SHARDS_PER_NODE, "1",
       ZkStateReader.AUTO_ADD_REPLICAS, "false",
+      ZkStateReader.REALTIME_REPLICAS, "-1",
       DocCollection.RULE, null,
       SNITCH, null));
 
@@ -182,6 +184,8 @@ public class OverseerCollectionMessageHandler implements OverseerMessageHandler 
         .put(DELETENODE, new DeleteNodeCmd(this))
         .put(BACKUP, new BackupCmd(this))
         .put(RESTORE, new RestoreCmd(this))
+        .put(CREATESNAPSHOT, new CreateSnapshotCmd(this))
+        .put(DELETESNAPSHOT, new DeleteSnapshotCmd(this))
         .put(SPLITSHARD, new SplitShardCmd(this))
         .put(ADDROLE, new OverseerRoleCmd(this, ADDROLE, overseerPrioritizer))
         .put(REMOVEROLE, new OverseerRoleCmd(this, REMOVEROLE, overseerPrioritizer))
@@ -205,6 +209,7 @@ public class OverseerCollectionMessageHandler implements OverseerMessageHandler 
         .put(DELETESHARD, new DeleteShardCmd(this))
         .put(DELETEREPLICA, new DeleteReplicaCmd(this))
         .put(ADDREPLICA, new AddReplicaCmd(this))
+        .put(MOVEREPLICA, new MoveReplicaCmd(this))
         .build()
     ;
   }
@@ -436,7 +441,8 @@ public class OverseerCollectionMessageHandler implements OverseerMessageHandler 
         ZkStateReader.CORE_NAME_PROP, core,
         ZkStateReader.NODE_NAME_PROP, replica.getStr(ZkStateReader.NODE_NAME_PROP),
         ZkStateReader.COLLECTION_PROP, collectionName,
-        ZkStateReader.CORE_NODE_NAME_PROP, replicaName);
+        ZkStateReader.CORE_NODE_NAME_PROP, replicaName,
+        ZkStateReader.BASE_URL_PROP, replica.getStr(ZkStateReader.BASE_URL_PROP));
     Overseer.getStateUpdateQueue(zkStateReader.getZkClient()).offer(Utils.toJSON(m));
   }
 
@@ -936,6 +942,12 @@ public class OverseerCollectionMessageHandler implements OverseerMessageHandler 
         if (srsp != null) {
           NamedList results = new NamedList();
           processResponse(results, srsp, Collections.emptySet());
+          if (srsp.getSolrResponse().getResponse() == null) {
+            NamedList response = new NamedList();
+            response.add("STATUS", "failed");
+            return response;
+          }
+          
           String r = (String) srsp.getSolrResponse().getResponse().get("STATUS");
           if (r.equals("running")) {
             log.debug("The task is still RUNNING, continuing to wait.");

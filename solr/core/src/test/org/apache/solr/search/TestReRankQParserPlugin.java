@@ -16,11 +16,12 @@
  */
 package org.apache.solr.search;
 
+import java.util.Map;
+
 import org.apache.solr.SolrTestCaseJ4;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.params.ModifiableSolrParams;
-import org.apache.solr.common.util.NamedList;
-import org.apache.solr.core.SolrInfoMBean;
+import org.apache.solr.metrics.MetricsMap;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -90,6 +91,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
     params.add("bff", "field(test_ti)");
     params.add("start", "0");
     params.add("rows", "6");
+    params.add("df", "text");
     assertQ(req(params), "*[count(//doc)=6]",
         "//result/doc[1]/float[@name='id'][.='3.0']",
         "//result/doc[2]/float[@name='id'][.='4.0']",
@@ -108,6 +110,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
     params.add("fl", "id,score");
     params.add("start", "0");
     params.add("rows", "10");
+    params.add("df", "text");
 
     assertQ(req(params), "*[count(//doc)=6]",
         "//result/doc[1]/float[@name='id'][.='2.0']",
@@ -129,6 +132,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
     params.add("start", "0");
     params.add("rows", "10");
     params.add("sort", "score desc");
+    params.add("df", "text");
     assertQ(req(params), "*[count(//doc)=6]",
         "//result/doc[1]/float[@name='id'][.='2.0']",
         "//result/doc[2]/float[@name='id'][.='6.0']",
@@ -150,6 +154,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
     params.add("start", "0");
     params.add("rows", "10");
     params.add("sort", "score desc,test_ti asc");
+    params.add("df", "text");
 
     assertQ(req(params), "*[count(//doc)=6]",
         "//result/doc[1]/float[@name='id'][.='2.0']",
@@ -193,6 +198,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
     params.add("fl", "id,score");
     params.add("start", "0");
     params.add("rows", "10");
+    params.add("df", "text");
 
     assertQ(req(params), "*[count(//doc)=6]",
         "//result/doc[1]/float[@name='id'][.='2.0']",
@@ -376,8 +382,8 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
         "//result/doc[5]/float[@name='id'][.='2.0']"
     );
 
-    SolrInfoMBean info  = h.getCore().getInfoRegistry().get("queryResultCache");
-    NamedList stats = info.getStatistics();
+    MetricsMap metrics = (MetricsMap)h.getCore().getCoreMetricManager().getRegistry().getMetrics().get("CACHE.searcher.queryResultCache");
+    Map<String,Object> stats = metrics.getValue();
 
     long inserts = (Long) stats.get("inserts");
 
@@ -401,8 +407,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
     );
 
 
-    info  = h.getCore().getInfoRegistry().get("queryResultCache");
-    stats = info.getStatistics();
+    stats = metrics.getValue();
 
     long inserts1 = (Long) stats.get("inserts");
 
@@ -426,8 +431,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
         "//result/doc[5]/float[@name='id'][.='1.0']"
     );
 
-    info  = h.getCore().getInfoRegistry().get("queryResultCache");
-    stats = info.getStatistics();
+    stats = metrics.getValue();
     long inserts2 = (Long) stats.get("inserts");
     //Last query was NOT added to the cache
     assertTrue(inserts1 == inserts2);
@@ -549,6 +553,7 @@ public class TestReRankQParserPlugin extends SolrTestCaseJ4 {
     params.add("fl", "id,score");
     params.add("start", "0");
     params.add("rows", "2");
+    params.add("df", "text");
 
     assertQ(req(params), "*[count(//doc)=2]",
         "//result/doc[1]/float[@name='id'][.='8.0']",

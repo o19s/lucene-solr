@@ -134,8 +134,10 @@ public class CorePropertiesLocator implements CoresLocator {
         public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
           if (file.getFileName().toString().equals(PROPERTIES_FILENAME)) {
             CoreDescriptor cd = buildCoreDescriptor(file, cc);
-            logger.debug("Found core {} in {}", cd.getName(), cd.getInstanceDir());
-            cds.add(cd);
+            if (cd != null) {
+              logger.debug("Found core {} in {}", cd.getName(), cd.getInstanceDir());
+              cds.add(cd);
+            }
             return FileVisitResult.SKIP_SIBLINGS;
           }
           return FileVisitResult.CONTINUE;
@@ -174,7 +176,9 @@ public class CorePropertiesLocator implements CoresLocator {
       for (String key : coreProperties.stringPropertyNames()) {
         propMap.put(key, coreProperties.getProperty(key));
       }
-      return new CoreDescriptor(cc, name, instanceDir, propMap);
+      CoreDescriptor ret = new CoreDescriptor(name, instanceDir, propMap, cc.getContainerProperties(), cc.isZooKeeperAware());
+      ret.loadExtraProperties();
+      return ret;
     }
     catch (IOException e) {
       logger.error("Couldn't load core descriptor from {}:{}", propertiesFile, e.toString());

@@ -16,7 +16,7 @@
  */
 package org.apache.solr.servlet;
 
-import javax.servlet.http.HttpServletRequest;
+import static org.apache.solr.common.params.CommonParams.PATH;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -39,11 +39,15 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+import javax.servlet.http.HttpServletRequest;
+
 import org.apache.commons.fileupload.FileItem;
 import org.apache.commons.fileupload.disk.DiskFileItemFactory;
 import org.apache.commons.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.io.FileCleaningTracker;
 import org.apache.commons.io.input.CloseShieldInputStream;
 import org.apache.lucene.util.IOUtils;
+import org.apache.solr.api.V2HttpCall;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.SolrException.ErrorCode;
 import org.apache.solr.common.params.CommonParams;
@@ -57,9 +61,9 @@ import org.apache.solr.core.SolrConfig;
 import org.apache.solr.core.SolrCore;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.request.SolrQueryRequestBase;
+import org.apache.solr.common.util.CommandOperation;
 import org.apache.solr.util.RTimerTree;
-
-import static org.apache.solr.common.params.CommonParams.PATH;
+import org.apache.solr.util.SolrFileCleaningTracker;
 
 
 public class SolrRequestParsers 
@@ -87,6 +91,8 @@ public class SolrRequestParsers
 
   /** Default instance for e.g. admin requests. Limits to 2 MB uploads and does not allow remote streams. */
   public static final SolrRequestParsers DEFAULT = new SolrRequestParsers();
+  
+  public static volatile SolrFileCleaningTracker fileCleaningTracker;
   
   /**
    * Pass in an xml configuration.  A null configuration will enable
@@ -220,10 +226,32 @@ public class SolrRequestParsers
       }
     }
 
+    final HttpSolrCall httpSolrCall = req == null ? null : (HttpSolrCall) req.getAttribute(HttpSolrCall.class.getName());
     SolrQueryRequestBase q = new SolrQueryRequestBase(core, params, requestTimer) {
       @Override
       public Principal getUserPrincipal() {
         return req == null ? null : req.getUserPrincipal();
+      }
+
+      @Override
+      public List<CommandOperation> getCommands(boolean validateInput) {
+        if (httpSolrCall != null) {
+          return httpSolrCall.getCommands(validateInput);
+        }
+        return super.getCommands(validateInput);
+      }
+
+      @Override
+      public Map<String, String> getPathTemplateValues() {
+        if (httpSolrCall != null && httpSolrCall instanceof V2HttpCall) {
+          return ((V2HttpCall) httpSolrCall).getUrlParts();
+        }
+        return super.getPathTemplateValues();
+      }
+
+      @Override
+      public HttpSolrCall getHttpSolrCall() {
+        return httpSolrCall;
       }
     };
     if( streams != null && streams.size() > 0 ) {
@@ -532,31 +560,30 @@ public class SolrRequestParsers
   /**
    * Extract Multipart streams
    */
-  static class MultipartRequestParser implements SolrRequestParser
-  {
+  static class MultipartRequestParser implements SolrRequestParser {
     private final int uploadLimitKB;
+    private DiskFileItemFactory factory = new DiskFileItemFactory();
     
-    public MultipartRequestParser( int limit )
-    {
+    public MultipartRequestParser(int limit) {
       uploadLimitKB = limit;
+
+      // Set factory constraints
+      FileCleaningTracker fct = fileCleaningTracker;
+      if (fct != null) {
+        factory.setFileCleaningTracker(fileCleaningTracker);
+      }
+      // TODO - configure factory.setSizeThreshold(yourMaxMemorySize);
+      // TODO - configure factory.setRepository(yourTempDirectory);
     }
     
     @Override
-    public SolrParams parseParamsAndFillStreams( 
-        final HttpServletRequest req, ArrayList<ContentStream> streams ) throws Exception
-    {
+    public SolrParams parseParamsAndFillStreams(
+        final HttpServletRequest req, ArrayList<ContentStream> streams) throws Exception {
       if( !ServletFileUpload.isMultipartContent(req) ) {
         throw new SolrException( ErrorCode.BAD_REQUEST, "Not multipart content! "+req.getContentType() );
       }
       
       MultiMapSolrParams params = parseQueryString( req.getQueryString() );
-      
-      // Create a factory for disk-based file items
-      DiskFileItemFactory factory = new DiskFileItemFactory();
-
-      // Set factory constraints
-      // TODO - configure factory.setSizeThreshold(yourMaxMemorySize);
-      // TODO - configure factory.setRepository(yourTempDirectory);
 
       // Create a new file upload handler
       ServletFileUpload upload = new ServletFileUpload(factory);

@@ -248,7 +248,7 @@ public class SolrPluginUtils {
                                           SolrQueryRequest req,
                                           SolrQueryResponse res) throws IOException {
     SolrIndexSearcher searcher = req.getSearcher();
-    if(!searcher.enableLazyFieldLoading) {
+    if(!searcher.getDocFetcher().isLazyFieldLoadingEnabled()) {
       // nothing to do
       return;
     }
@@ -583,8 +583,8 @@ public class SolrPluginUtils {
         String[] fieldAndSlopVsBoost = caratPattern.split(s);
         String[] fieldVsSlop = tildePattern.split(fieldAndSlopVsBoost[0]);
         String field = fieldVsSlop[0];
-        int slop  = (2 == fieldVsSlop.length) ? Integer.valueOf(fieldVsSlop[1]) : defaultSlop;
-        Float boost = (1 == fieldAndSlopVsBoost.length) ? 1  : Float.valueOf(fieldAndSlopVsBoost[1]);
+        int slop  = (2 == fieldVsSlop.length) ? Integer.parseInt(fieldVsSlop[1]) : defaultSlop;
+        float boost = (1 == fieldAndSlopVsBoost.length) ? 1  : Float.parseFloat(fieldAndSlopVsBoost[1]);
         FieldParams fp = new FieldParams(field,wordGrams,slop,boost);
         out.add(fp);
       }
@@ -907,7 +907,7 @@ public class SolrPluginUtils {
      * aliases should work)
      */
     @Override
-    protected Query getFieldQuery(String field, String queryText, boolean quoted)
+    protected Query getFieldQuery(String field, String queryText, boolean quoted, boolean raw)
         throws SyntaxError {
 
       if (aliases.containsKey(field)) {
@@ -917,7 +917,7 @@ public class SolrPluginUtils {
         List<Query> disjuncts = new ArrayList<>();
         for (String f : a.fields.keySet()) {
 
-          Query sub = getFieldQuery(f,queryText,quoted);
+          Query sub = getFieldQuery(f,queryText,quoted, false);
           if (null != sub) {
             if (null != a.fields.get(f)) {
               sub = new BoostQuery(sub, a.fields.get(f));
@@ -931,7 +931,7 @@ public class SolrPluginUtils {
 
       } else {
         try {
-          return super.getFieldQuery(field, queryText, quoted);
+          return super.getFieldQuery(field, queryText, quoted, raw);
         } catch (Exception e) {
           return null;
         }
@@ -1022,6 +1022,7 @@ public class SolrPluginUtils {
    * @return The new {@link org.apache.solr.common.SolrDocumentList} containing all the loaded docs
    * @throws java.io.IOException if there was a problem loading the docs
    * @since solr 1.4
+   * @deprecated TODO in 7.0 remove this. It was inlined into ClusteringComponent. DWS: 'ids' is ugly.
    */
   public static SolrDocumentList docListToSolrDocumentList(
       DocList docs,
@@ -1029,6 +1030,10 @@ public class SolrPluginUtils {
       Set<String> fields,
       Map<SolrDocument, Integer> ids ) throws IOException
   {
+    /*  DWS deprecation note:
+     It's only called by ClusteringComponent, and I think the "ids" param aspect is a bit messy and not worth supporting.
+     If someone wants a similar method they can speak up and we can add a method to SolrDocumentFetcher.
+     */
     IndexSchema schema = searcher.getSchema();
 
     SolrDocumentList list = new SolrDocumentList();
@@ -1065,6 +1070,10 @@ public class SolrPluginUtils {
 
 
   public static void invokeSetters(Object bean, Iterable<Map.Entry<String,Object>> initArgs) {
+    invokeSetters(bean, initArgs, false);
+  }
+
+  public static void invokeSetters(Object bean, Iterable<Map.Entry<String,Object>> initArgs, boolean lenient) {
     if (initArgs == null) return;
     final Class<?> clazz = bean.getClass();
     for (Map.Entry<String,Object> entry : initArgs) {
@@ -1072,19 +1081,27 @@ public class SolrPluginUtils {
       String setterName = "set" + String.valueOf(Character.toUpperCase(key.charAt(0))) + key.substring(1);
       try {
         final Object val = entry.getValue();
-        final Method method = findSetter(clazz, setterName, key, val.getClass());
-        method.invoke(bean, val);
+        final Method method = findSetter(clazz, setterName, key, val.getClass(), lenient);
+        if (method != null) {
+          method.invoke(bean, val);
+        }
       } catch (InvocationTargetException | IllegalAccessException e1) {
+        if (lenient) {
+          continue;
+        }
         throw new RuntimeException("Error invoking setter " + setterName + " on class : " + clazz.getName(), e1);
       }
     }
   }
 
-  private static Method findSetter(Class<?> clazz, String setterName, String key, Class<?> paramClazz) {
+  private static Method findSetter(Class<?> clazz, String setterName, String key, Class<?> paramClazz, boolean lenient) {
     BeanInfo beanInfo;
     try {
       beanInfo = Introspector.getBeanInfo(clazz);
     } catch (IntrospectionException ie) {
+      if (lenient) {
+        return null;
+      }
       throw new RuntimeException("Error getting bean info for class : " + clazz.getName(), ie);
     }
     for (final boolean matchParamClazz: new boolean[]{true, false}) {
@@ -1096,6 +1113,9 @@ public class SolrPluginUtils {
           return m;
         }
       }
+    }
+    if (lenient) {
+      return null;
     }
     throw new RuntimeException("No setter corrresponding to '" + key + "' in " + clazz.getName());
   }

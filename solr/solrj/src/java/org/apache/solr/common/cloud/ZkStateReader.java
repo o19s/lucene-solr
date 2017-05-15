@@ -96,6 +96,7 @@ public class ZkStateReader implements Closeable {
   public static final String MAX_SHARDS_PER_NODE = "maxShardsPerNode";
   public static final String AUTO_ADD_REPLICAS = "autoAddReplicas";
   public static final String MAX_CORES_PER_NODE = "maxCoresPerNode";
+  public static final String REALTIME_REPLICAS = "realtimeReplicas";
 
   public static final String ROLES = "/roles.json";
 
@@ -144,7 +145,7 @@ public class ZkStateReader implements Closeable {
 
   private final ExecutorService notifications = ExecutorUtil.newMDCAwareCachedThreadPool("watches");
 
-  private class CollectionWatch {
+  private static class CollectionWatch {
 
     int coreRefCount = 0;
     Set<CollectionStateWatcher> stateWatchers = ConcurrentHashMap.newKeySet();
@@ -633,6 +634,7 @@ public class ZkStateReader implements Closeable {
 
     @Override
     public DocCollection get() {
+      gets.incrementAndGet();
       // TODO: consider limited caching
       return getCollectionLive(ZkStateReader.this, collName);
     }
@@ -915,22 +917,25 @@ public class ZkStateReader implements Closeable {
     }
     return null;
   }
-  
+
   /**
    * Returns the baseURL corresponding to a given node's nodeName --
-   * NOTE: does not (currently) imply that the nodeName (or resulting 
+   * NOTE: does not (currently) imply that the nodeName (or resulting
    * baseURL) exists in the cluster.
    * @lucene.experimental
    */
   public String getBaseUrlForNodeName(final String nodeName) {
+    return getBaseUrlForNodeName(nodeName, getClusterProperty(URL_SCHEME, "http"));
+  }
+
+  public static String getBaseUrlForNodeName(final String nodeName, String urlScheme) {
     final int _offset = nodeName.indexOf("_");
     if (_offset < 0) {
-      throw new IllegalArgumentException("nodeName does not contain expected '_' seperator: " + nodeName);
+      throw new IllegalArgumentException("nodeName does not contain expected '_' separator: " + nodeName);
     }
     final String hostAndPort = nodeName.substring(0,_offset);
     try {
       final String path = URLDecoder.decode(nodeName.substring(1+_offset), "UTF-8");
-      String urlScheme = getClusterProperty(URL_SCHEME, "http");
       return urlScheme + "://" + hostAndPort + (path.isEmpty() ? "" : ("/" + path));
     } catch (UnsupportedEncodingException e) {
       throw new IllegalStateException("JVM Does not seem to support UTF-8", e);
