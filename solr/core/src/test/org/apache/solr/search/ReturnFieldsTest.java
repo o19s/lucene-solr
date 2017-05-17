@@ -679,8 +679,8 @@ public class ReturnFieldsTest extends SolrTestCaseJ4 {
 
   static {
     // if the JVM/unicode can redefine whitespace once (LUCENE-6760), it might happen again
-    // in the future.  if that happens, fail early with a clera msg, even if java asserts
-    // (used in randomWhitespace) are disbled
+    // in the future.  if that happens, fail early with a clear msg, even if java asserts
+    // (used in randomWhitespace) are disabled
     
     for (int offset = 0; offset < WHITESPACE_CHARACTERS.length; offset++) {
       char c = WHITESPACE_CHARACTERS[offset];
