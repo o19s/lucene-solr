@@ -297,12 +297,15 @@ public class SolrReturnFields extends ReturnFields {
 
   @Override
   public Set<String> getLuceneFieldNames() {
-    return (wantsAllFields || CollectionUtils.isEmpty(luceneFieldNames)) ? null : luceneFieldNames;
+    return getLuceneFieldNames(false);
   }
 
   @Override
   public Set<String> getLuceneFieldNames(boolean ignoreWantsAll) {
-    return CollectionUtils.isEmpty(luceneFieldNames) ? null : luceneFieldNames;
+    if (ignoreWantsAll)
+      return luceneFieldNames;
+    else
+      return (wantsAllFields || CollectionUtils.isEmpty(luceneFieldNames)) ? null : luceneFieldNames;
   }
 
   @Override
@@ -931,6 +934,11 @@ public class SolrReturnFields extends ReturnFields {
       }
       luceneFieldNames().add(key);
     }
+
+    // At the very end of parsing, if there are inclusion or exclusion globs, indicate to callers that they should use
+    // the wantsField() method for each field individually. Do this by returning an empty luceneFieldNames
+    if (!wantsAllFields && (hasPatternMatching())) luceneFieldNames().clear();
+
     if (augmenters.size() == 1) {
       transformer = augmenters.getTransformer(0);
     } else if (augmenters.size() > 1) {
