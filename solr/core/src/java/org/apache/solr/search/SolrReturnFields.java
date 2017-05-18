@@ -446,7 +446,12 @@ public class SolrReturnFields extends ReturnFields {
   private String getExpressionAlias(final StringBuilder bufferChar) {
     final int indexOfColon = bufferChar.indexOf(ALIAS_VALUE_SEPARATOR);
     final int indexOfParen = bufferChar.indexOf(Character.toString(OPEN_PARENTHESIS));
-    return (indexOfColon == -1 || indexOfColon > indexOfParen) ? null : bufferChar.substring(0, indexOfColon);
+    if (indexOfColon == -1) {
+      return null;
+    }
+    else {
+      return (indexOfParen == -1 || indexOfColon < indexOfParen) ? bufferChar.substring(0, indexOfColon) : null;
+    }
   }
 
   /**
@@ -460,8 +465,13 @@ public class SolrReturnFields extends ReturnFields {
   private String getExpressionValue(final StringBuilder bufferChar) {
     final int indexOfColon = bufferChar.indexOf(ALIAS_VALUE_SEPARATOR);
     final int indexOfParen = bufferChar.indexOf(Character.toString(OPEN_PARENTHESIS));
-    return (indexOfColon == -1 || indexOfColon > indexOfParen) ?
-        bufferChar.toString() : bufferChar.substring(indexOfColon + 1);
+    if (indexOfColon == -1) {
+      return bufferChar.toString();
+    }
+    else {
+      return (indexOfParen == -1 || indexOfColon < indexOfParen) ?
+          bufferChar.substring(indexOfColon + 1) : bufferChar.toString();
+    }
   }
 
   /**
