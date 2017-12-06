@@ -17,7 +17,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-The field type defines how Solr should interpret data in a field and how the field can be queried. There are many field types included with Solr by default, and they can also be defined locally.
+The field type defines how Solr should interpret data in a field and how the field will be queried. There are many field types included with Solr by default, and they can also be defined locally.
 
 Topics covered in this section:
 
