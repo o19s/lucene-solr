@@ -20,6 +20,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.CachingTokenFilter;
@@ -27,6 +29,7 @@ import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionLengthAttribute;
 import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
+import org.apache.lucene.analysis.tokenattributes.TypeAttribute;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
@@ -386,25 +389,56 @@ public class QueryBuilder {
    */
   protected Query analyzeBoolean(String field, TokenStream stream) throws IOException {
     TermToBytesRefAttribute termAtt = stream.getAttribute(TermToBytesRefAttribute.class);
+    TypeAttribute typeAtt = stream.getAttribute(TypeAttribute.class);
     
     stream.reset();
-    List<Term> terms = new ArrayList<>();
+    List<Term> synonyms = new ArrayList<>();
+    List<Term> nonSynonyms = new ArrayList<>();
     while (stream.incrementToken()) {
-      terms.add(new Term(field, termAtt.getBytesRef()));
+      if (typeAtt.type().equals("SYNONYM")) {
+        synonyms.add(new Term(field, termAtt.getBytesRef()));
+      } else {
+        nonSynonyms.add(new Term(field, termAtt.getBytesRef()));
+      }
     }
-    
-    return newSynonymQuery(terms.toArray(new Term[terms.size()]));
+
+    if (nonSynonyms.size() > 0) {
+      BooleanQuery.Builder q = newBooleanQuery();
+      q.add(new BooleanClause(newSynonymQuery(synonyms.toArray(new Term[synonyms.size()])),
+                                        BooleanClause.Occur.SHOULD));
+      for (Term t: nonSynonyms) {
+        q.add(newTermQuery(t), BooleanClause.Occur.SHOULD);
+      }
+      return q.build();
+    }
+    else {
+      return newSynonymQuery(synonyms.toArray(new Term[synonyms.size()]));
+    }
   }
 
-  protected void add(BooleanQuery.Builder q, List<Term> current, BooleanClause.Occur operator) {
+  /*
+   Add all tokens at one position
+   */
+  protected void add(BooleanQuery.Builder q, Map<String, List<Term>> current, BooleanClause.Occur operator) {
     if (current.isEmpty()) {
       return;
     }
-    if (current.size() == 1) {
-      q.add(newTermQuery(current.get(0)), operator);
-    } else {
-      q.add(newSynonymQuery(current.toArray(new Term[current.size()])), operator);
+    for (Map.Entry<String, List<Term>> entry: current.entrySet()) {
+      List<Term> currTerms = entry.getValue();
+      if (entry.getKey().equals("SYNONYM")) {
+        if (currTerms.size() == 1) {
+          q.add(newTermQuery(currTerms.get(0)), operator);
+        } else {
+          q.add(newSynonymQuery(currTerms.toArray(new Term[current.size()])), operator);
+        }
+      } else {
+        for ( Term term: currTerms ) {
+          q.add(newTermQuery(term), operator);
+        }
+      }
     }
+
+
   }
 
   /** 
@@ -412,10 +446,11 @@ public class QueryBuilder {
    */
   protected Query analyzeMultiBoolean(String field, TokenStream stream, BooleanClause.Occur operator) throws IOException {
     BooleanQuery.Builder q = newBooleanQuery();
-    List<Term> currentQuery = new ArrayList<>();
+    Map<String, List<Term>> currentQuery = new TreeMap<String, List<Term>>();
     
     TermToBytesRefAttribute termAtt = stream.getAttribute(TermToBytesRefAttribute.class);
     PositionIncrementAttribute posIncrAtt = stream.getAttribute(PositionIncrementAttribute.class);
+    TypeAttribute typeAtt = stream.getAttribute(TypeAttribute.class);
     
     stream.reset();
     while (stream.incrementToken()) {
@@ -423,7 +458,8 @@ public class QueryBuilder {
         add(q, currentQuery, operator);
         currentQuery.clear();
       }
-      currentQuery.add(new Term(field, termAtt.getBytesRef()));
+      currentQuery.putIfAbsent(typeAtt.type(), new ArrayList<Term>());
+      currentQuery.get(typeAtt.type()).add(new Term(field, termAtt.getBytesRef()));
     }
     add(q, currentQuery, operator);
     
@@ -525,10 +561,10 @@ public class QueryBuilder {
         };
         queryPos = newGraphSynonymQuery(queries);
       } else {
-        Term[] terms = graph.getTerms(field, start);
+        GraphTokenStreamFiniteStrings.TermMeta[] terms = graph.getTerms(start);
         assert terms.length > 0;
         if (terms.length == 1) {
-          queryPos = newTermQuery(terms[0]);
+          queryPos = newTermQuery(new Term(field, terms[0].term));
         } else {
           queryPos = newSynonymQuery(terms);
         }

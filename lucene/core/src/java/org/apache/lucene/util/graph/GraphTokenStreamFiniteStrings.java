@@ -32,6 +32,7 @@ import org.apache.lucene.analysis.tokenattributes.BytesTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionLengthAttribute;
 import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
+import org.apache.lucene.analysis.tokenattributes.TypeAttribute;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.IntsRef;
@@ -48,7 +49,12 @@ import static org.apache.lucene.util.automaton.Operations.DEFAULT_MAX_DETERMINIZ
  * This class also provides helpers to explore the different paths of the {@link Automaton}.
  */
 public final class GraphTokenStreamFiniteStrings {
-  private final Map<Integer, BytesRef> idToTerm = new HashMap<>();
+  public final class TermMeta {
+    public BytesRef term;
+    public String type;
+  }
+
+  private final Map<Integer, TermMeta> idToTerm = new HashMap<>();
   private final Map<Integer, Integer> idToInc = new HashMap<>();
   private final Automaton det;
   private final Transition transition = new Transition();
@@ -72,7 +78,7 @@ public final class GraphTokenStreamFiniteStrings {
       if (offset < end) {
         clearAttributes();
         int id = ids.ints[offset];
-        termAtt.setBytesRef(idToTerm.get(id));
+        termAtt.setBytesRef(idToTerm.get(id).term);
 
         int incr = 1;
         if (idToInc.containsKey(id)) {
@@ -114,17 +120,16 @@ public final class GraphTokenStreamFiniteStrings {
   /**
    * Returns the list of terms that start at the provided state
    */
-  public Term[] getTerms(String field, int state) {
+  public TermMeta[] getTerms(int state) {
     int numT = det.initTransition(state, transition);
-    List<Term> terms = new ArrayList<> ();
+    List<TermMeta> terms = new ArrayList<> ();
     for (int i = 0; i < numT; i++) {
       det.getNextTransition(transition);
       for (int id = transition.min; id <= transition.max; id++) {
-        Term term = new Term(field, idToTerm.get(id));
-        terms.add(term);
+        terms.add(idToTerm.get(id));
       }
     }
-    return terms.toArray(new Term[terms.size()]);
+    return terms.toArray(new TermMeta[terms.size()]);
   }
 
   /**
@@ -205,6 +210,7 @@ public final class GraphTokenStreamFiniteStrings {
     final TermToBytesRefAttribute termBytesAtt = in.addAttribute(TermToBytesRefAttribute.class);
     final PositionIncrementAttribute posIncAtt = in.addAttribute(PositionIncrementAttribute.class);
     final PositionLengthAttribute posLengthAtt = in.addAttribute(PositionLengthAttribute.class);
+    final TypeAttribute typeAttr = in.addAttribute(TypeAttribute.class);
 
     in.reset();
 
@@ -229,7 +235,8 @@ public final class GraphTokenStreamFiniteStrings {
       }
 
       BytesRef term = termBytesAtt.getBytesRef();
-      int id = getTermID(currentIncr, prevIncr, term);
+      String type = typeAttr.type();
+      int id = getTermID(currentIncr, prevIncr, term, type);
       builder.addTransition(pos, endPos, id);
 
       // only save last increment on non-zero increment in case we have multiple stacked tokens
@@ -248,11 +255,13 @@ public final class GraphTokenStreamFiniteStrings {
   /**
    * Gets an integer id for a given term and saves the position increment if needed.
    */
-  private int getTermID(int incr, int prevIncr, BytesRef term) {
+  private int getTermID(int incr, int prevIncr, BytesRef term, String type) {
     assert term != null;
     boolean isStackedGap = incr == 0 && prevIncr > 1;
     int id = idToTerm.size();
-    idToTerm.put(id, BytesRef.deepCopyOf(term));
+    TermMeta tm = new TermMeta();
+    tm.term = BytesRef.deepCopyOf(term); tm.type = type;
+    idToTerm.put(id, tm);
     // stacked token should have the same increment as original token at this position
     if (isStackedGap) {
       idToInc.put(id, prevIncr);
